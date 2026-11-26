@@ -1,0 +1,28 @@
+{
+  "name": "steam-market-batch-lister",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "author": "shuang-ying",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/shuang-ying/steam-market-batch-lister.git"
+  },
+  "description": "Native Steam Client plugin (Millennium) for batch listing CS2 / Dota 2 / TF2 / Steam inventory items.",
+  "scripts": {
+    "prepare": "starlight lsp",
+    "dev": "starlight watch",
+    "build": "node -e \"require('fs').mkdirSync('dist',{recursive:true})\" && starlight pack --release",
+    "build:install": "npm run build && powershell -ExecutionPolicy Bypass -File scripts/install-millennium.ps1",
+    "test": "node scripts/run-tests.mjs",
+    "typecheck": "tsc --noEmit",
+    "build:userscript": "node scripts/build-userscript.mjs"
+  },
+  "devDependencies": {
+    "@steambrew/starlight": "^1.1.7",
+    "@types/react": "^19.1.1",
+    "@types/react-dom": "^19.1.1",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.8.2"
+  }
+}
