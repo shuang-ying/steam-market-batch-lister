@@ -1,0 +1,65 @@
+name: Release Plugin
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Build Millennium plugin (.star)
+        run: npm run build
+
+      - name: Build Tampermonkey userscript (.user.js)
+        run: npm run build:userscript
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Steam Market Batch Lister ${{ github.ref_name }}"
+          generate_release_notes: true
+          body: |
+            ## 安装方式
+
+            ### 1. Steam 桌面客户端（Millennium >= v3.4.0）
+            1. 下载下方附件中的 **`com.steammarket.batchlister.star`**；
+            2. 复制到 `<你的 Steam 安装目录>\millennium\plugins\` 目录；
+            3. 完全退出并重启 Steam 客户端，在 **Millennium → 插件** 中启用 **Steam Market Batch Lister**；
+            4. 打开 Steam **个人资料 → 库存**，点击 **「⚡ 市场批量上架」** 即可使用。
+
+            ### 2. 浏览器油猴脚本（备用版）
+            - 下载下方附件中的 **`steam-market-batch-lister.user.js`**，导入 Tampermonkey / Violentmonkey 即可在网页版 Steam 库存使用。
+
+            ## 核心特性
+            - 支持 **CS2 / Dota 2 / TF2 / Steam 通用库存（753/6）** 及任意支持社区市场的游戏
+            - 四大定价策略：**最低卖价** / **卖家减 0.01** / **最高求购（秒出）** / **自定义价格**（固定买家付、固定实收、偏移、比例、分批锁定单行价）
+            - **🛡 拟真防风控**：三角分布随机延迟、分批自动休眠与倒计时跳过、连续 429 自动熔断保护、异常低价警告、CS2/Dota2/TF2 特殊修饰防误卖隔离
+            - 支持同类大宗物品一键跳转 Steam 官方 `/market/multisell` 批量出售页
+          files: |
+            dist/com.steammarket.batchlister.star
+            dist/steam-market-batch-lister.user.js
