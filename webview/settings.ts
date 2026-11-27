@@ -72,6 +72,17 @@ function sanitizeSettings(raw: unknown): PluginSettings {
       95,
       DEFAULT_SETTINGS.lowPriceWarnPercent,
     ),
+    roundToWholeUnits:
+      typeof obj.roundToWholeUnits === 'boolean'
+        ? obj.roundToWholeUnits
+        : DEFAULT_SETTINGS.roundToWholeUnits,
+    manualFxRateToCny:
+      typeof obj.manualFxRateToCny === 'number' &&
+      Number.isFinite(obj.manualFxRateToCny) &&
+      obj.manualFxRateToCny >= 0 &&
+      obj.manualFxRateToCny <= 1000
+        ? obj.manualFxRateToCny
+        : DEFAULT_SETTINGS.manualFxRateToCny,
     skipModified: typeof obj.skipModified === 'boolean' ? obj.skipModified : DEFAULT_SETTINGS.skipModified,
     highValueThresholdCents: clampInt(
       obj.highValueThresholdCents,

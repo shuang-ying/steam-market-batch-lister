@@ -227,14 +227,22 @@ export function resolveSteamPageContext(forceRefresh = false): ResolvedSteamPage
       : null;
 
   // Fallback: inspect inline <script> blocks (works in isolated worlds!)
+  // IMPORTANT: never freeze partial null results — keep re-scanning until walletInfo/steamId/sessionId are found.
   if (!steamId || !sessionId || viewingOwnProfile === null || !walletInfo || !appContextData) {
-    if (!cachedScriptContext) {
+    const cacheIncomplete =
+      !cachedScriptContext ||
+      !cachedScriptContext.steamId ||
+      !cachedScriptContext.sessionId ||
+      !cachedScriptContext.walletInfo ||
+      !cachedScriptContext.appContextData;
+
+    if (cacheIncomplete) {
       const merged: ResolvedSteamPageContext = {
-        steamId: null,
-        sessionId: null,
-        viewingOwnProfile: null,
-        walletInfo: null,
-        appContextData: null,
+        steamId: cachedScriptContext?.steamId ?? null,
+        sessionId: cachedScriptContext?.sessionId ?? null,
+        viewingOwnProfile: cachedScriptContext?.viewingOwnProfile ?? null,
+        walletInfo: cachedScriptContext?.walletInfo ?? null,
+        appContextData: cachedScriptContext?.appContextData ?? null,
       };
       const scripts = document.querySelectorAll('script:not([src])');
       scripts.forEach((el) => {
@@ -278,11 +286,11 @@ export function resolveSteamPageContext(forceRefresh = false): ResolvedSteamPage
       cachedScriptContext = merged;
     }
 
-    steamId = steamId || cachedScriptContext.steamId;
-    sessionId = sessionId || cachedScriptContext.sessionId;
-    if (viewingOwnProfile === null) viewingOwnProfile = cachedScriptContext.viewingOwnProfile;
-    walletInfo = walletInfo || cachedScriptContext.walletInfo;
-    appContextData = appContextData || cachedScriptContext.appContextData;
+    steamId = steamId || cachedScriptContext!.steamId;
+    sessionId = sessionId || cachedScriptContext!.sessionId;
+    if (viewingOwnProfile === null) viewingOwnProfile = cachedScriptContext!.viewingOwnProfile;
+    walletInfo = walletInfo || cachedScriptContext!.walletInfo;
+    appContextData = appContextData || cachedScriptContext!.appContextData;
   }
 
   return {
@@ -556,6 +564,7 @@ export function groupInventoryAssets(
         quote: null,
         priceStatus: 'idle',
         manualBuyerPriceCents: null,
+        costPriceCny: null,
       };
       map.set(groupKey, group);
     }

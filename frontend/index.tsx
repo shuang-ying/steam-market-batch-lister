@@ -168,6 +168,14 @@ const SettingsContent = () => {
       />
 
       <ToggleField
+        label="强制整数上架（去小数）"
+        description="开启后自动将提交给 Steam 的实收价对齐到整数货币单位（适合卢比 INR / 卢布 RUB 等区域减少小数取整偏差）"
+        checked={settings.roundToWholeUnits}
+        disabled={!loaded}
+        onChange={(checked) => updateSettings({ roundToWholeUnits: checked })}
+      />
+
+      <ToggleField
         label="全选时跳过含印花 / 改名 / 宝石物品"
         description="自动保护 CS2 印花/挂件/改名枪、Dota 2 镶嵌宝石、TF2 涂色/咒语物品，避免按底价误卖"
         checked={settings.skipModified}

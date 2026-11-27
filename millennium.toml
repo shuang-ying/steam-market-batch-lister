@@ -1,7 +1,7 @@
 [plugin]
 id = "com.steammarket.batchlister"
 name = "Steam Market Batch Lister"
-version = "1.0.0"
+version = "1.1.0"
 author = "shuang-ying"
 description = "Steam 客户端原生市场批量上架插件，支持 CS2 / Dota 2 / TF2 / 通用库存，支持最低卖价、最低价-0.01、最高求购秒出与自定义价格。"
 

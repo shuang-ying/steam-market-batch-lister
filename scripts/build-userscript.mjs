@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 const banner = `// ==UserScript==
 // @name         Steam 市场批量上架助手 (Steam Market Batch Lister)
 // @namespace    com.steammarket.batchlister
-// @version      1.0.0
+// @version      1.1.0
 // @description  支持 CS2 / Dota 2 / TF2 / Steam 通用库存批量查价与上架（最低卖价、卖家减 0.01、最高求购秒出）
 // @match        https://steamcommunity.com/id/*/inventory*
 // @match        https://steamcommunity.com/profiles/*/inventory*

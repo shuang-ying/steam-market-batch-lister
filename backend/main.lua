@@ -1,5 +1,33 @@
 local logger = require("logger")
 local millennium = require("millennium")
+local ok_http, http = pcall(require, "http")
+
+---@ffi
+--- Fetch a public HTTPS URL from Lua backend (bypasses Steam page CSP/CORS for daily FX rates)
+---@param url string
+---@return string
+function http_get_text(url)
+    if not ok_http or type(http) ~= "table" or type(http.get) ~= "function" then
+        return ""
+    end
+    if type(url) ~= "string" or not url:match("^https://") then
+        return ""
+    end
+    local ok_call, res, err = pcall(http.get, url, { timeout = 10, follow_redirects = true })
+    if not ok_call then
+        logger:warn("http_get_text pcall error: " .. tostring(res))
+        return ""
+    end
+    if not res or type(res) ~= "table" then
+        logger:warn("http_get_text failed: " .. tostring(err))
+        return ""
+    end
+    if res.status == 200 and type(res.body) == "string" then
+        return res.body
+    end
+    logger:warn("http_get_text status " .. tostring(res.status) .. " for " .. url)
+    return ""
+end
 
 ---@ffi
 --- Return persisted plugin settings as JSON string
@@ -40,7 +68,7 @@ end
 function get_plugin_info()
     local ver = tostring(millennium.version() or "unknown"):gsub('"', '\\"')
     return string.format(
-        '{"name":"Steam Market Batch Lister","version":"1.0.0","millenniumVersion":"%s"}',
+        '{"name":"Steam Market Batch Lister","version":"1.1.0","millenniumVersion":"%s"}',
         ver
     )
 end

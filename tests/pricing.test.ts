@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  getLocalDateKey,
+  parseFrankfurterRate,
+  parseJsdelivrCurrencyApiRate,
+  parseOpenErApiRate,
+} from '../webview/exchange-rate.ts';
+import {
   detectItemModifiers,
   extractMarketableAssets,
   extractMarketableAssetsFromApiPage,
@@ -17,10 +23,13 @@ import {
   computeNextSellDelayMs,
 } from '../webview/pacing.ts';
 import {
+  calculateBalanceRatio,
   calculateBuyerPaysFromSellerReceives,
   calculateSellerReceivesFromBuyerPays,
+  centsToCnyYuan,
   createWalletFeeConfig,
   formatCents,
+  formatCnyYuan,
   parseSteamPriceToCents,
   resolveStrategyPrice,
 } from '../webview/pricing.ts';
@@ -419,4 +428,56 @@ test('Isolated-world script/cookie extraction and Inventory JSON API parser work
   assert.equal(apiRes.assets[0].assetid, '1001');
   assert.equal(apiRes.assets[0].displayName, '变革武器箱');
   assert.equal(apiRes.assets[0].commodity, true);
+});
+
+test('Whole-unit currency snapping, daily FX parsing, CNY conversion, and 3-decimal balance ratio', () => {
+  const inrWallet = createWalletFeeConfig({
+    wallet_currency: 24,
+    wallet_country: 'IN',
+    wallet_fee_percent: '0.05',
+    wallet_publisher_fee_percent_default: '0.10',
+    wallet_fee_minimum: '1',
+    wallet_fee_base: '0',
+  });
+  assert.equal(inrWallet.currencyCode, 'INR');
+  assert.equal(inrWallet.steamWholeUnitsHint, true);
+  assert.equal(inrWallet.walletDetected, true);
+
+  // Force whole-unit snapping ensures sellerReceives is a multiple of 100 (whole rupees)
+  const wholeCalc = calculateSellerReceivesFromBuyerPays(7998, 0.1, inrWallet, true);
+  assert.equal(wholeCalc.sellerReceivesCents % 100, 0);
+  assert.ok(wholeCalc.buyerPaysCents <= 7998);
+
+  // Zero-decimal currency (JPY) ALWAYS snaps sellerReceives to multiples of 100
+  const jpyWallet = createWalletFeeConfig({
+    wallet_currency: 8,
+    wallet_country: 'JP',
+    wallet_fee_percent: '0.05',
+    wallet_publisher_fee_percent_default: '0.10',
+    wallet_fee_minimum: '100',
+    wallet_fee_base: '0',
+  });
+  const jpyCalc = calculateSellerReceivesFromBuyerPays(11500, 0.1, jpyWallet);
+  assert.equal(jpyCalc.sellerReceivesCents % 100, 0);
+  assert.equal(jpyCalc.sellerReceivesCents, 10000);
+  assert.equal(jpyCalc.buyerPaysCents, 11500);
+
+  // Daily FX API parsers
+  assert.equal(parseOpenErApiRate('{"result":"success","rates":{"CNY":0.072326}}'), 0.072326);
+  assert.equal(parseJsdelivrCurrencyApiRate('{"date":"2026-11-27","inr":{"cny":0.0721}}', 'INR'), 0.0721);
+  assert.equal(parseFrankfurterRate('{"rates":{"CNY":0.0725}}'), 0.0725);
+  assert.equal(getLocalDateKey(new Date(2026, 10, 27)), '2026-11-27');
+
+  // CNY conversion + Balance ratio (user example: cost ¥1.00 / seller net ¥1.50 = 0.667)
+  const netCny = centsToCnyYuan(6955, 0.072326);
+  assert.ok(netCny !== null);
+  assert.equal(formatCnyYuan(netCny), '¥5.03');
+
+  const ratioExample = calculateBalanceRatio(1, 1.5);
+  assert.ok(ratioExample);
+  assert.equal(ratioExample.formatted, '0.667');
+
+  assert.equal(calculateBalanceRatio(0, 1.5), null);
+  assert.equal(calculateBalanceRatio(1, 0), null);
+  assert.equal(calculateBalanceRatio(null, 1.5), null);
 });

@@ -11,53 +11,76 @@ export interface CustomPriceOptions {
   fixedPriceCents: number;
   offsetCents: number;
   percent: number;
+  roundToWholeUnits?: boolean;
 }
 
-export const CURRENCY_META: Record<
-  number,
-  { code: string; symbol: string; prefix: boolean; zeroDecimal?: boolean }
-> = {
+export interface CurrencyMetaEntry {
+  code: string;
+  symbol: string;
+  prefix: boolean;
+  /** True for currencies with no decimal subdivisions on Steam Market (JPY/KRW/IDR/VND/CLP/COP/TWD/CRC/UYU) */
+  zeroDecimal?: boolean;
+  /** Mirrors Steam global.js g_rgCurrencyData.bWholeUnitsOnly */
+  steamWholeUnitsOnly?: boolean;
+}
+
+export const CURRENCY_META: Record<number, CurrencyMetaEntry> = {
   1: { code: 'USD', symbol: '$', prefix: true },
   2: { code: 'GBP', symbol: '£', prefix: true },
   3: { code: 'EUR', symbol: '€', prefix: false },
   4: { code: 'CHF', symbol: 'CHF ', prefix: true },
-  5: { code: 'RUB', symbol: ' pуб.', prefix: false },
+  5: { code: 'RUB', symbol: ' руб.', prefix: false, steamWholeUnitsOnly: true },
   6: { code: 'PLN', symbol: ' zł', prefix: false },
   7: { code: 'BRL', symbol: 'R$ ', prefix: true },
-  8: { code: 'JPY', symbol: '¥ ', prefix: true, zeroDecimal: true },
+  8: { code: 'JPY', symbol: '¥ ', prefix: true, zeroDecimal: true, steamWholeUnitsOnly: true },
   9: { code: 'NOK', symbol: ' kr', prefix: false },
-  10: { code: 'IDR', symbol: 'Rp ', prefix: true, zeroDecimal: true },
+  10: { code: 'IDR', symbol: 'Rp ', prefix: true, zeroDecimal: true, steamWholeUnitsOnly: true },
   11: { code: 'MYR', symbol: 'RM', prefix: true },
   12: { code: 'PHP', symbol: '₱', prefix: true },
   13: { code: 'SGD', symbol: 'S$', prefix: true },
   14: { code: 'THB', symbol: '฿', prefix: true },
-  15: { code: 'VND', symbol: '₫', prefix: false, zeroDecimal: true },
-  16: { code: 'KRW', symbol: '₩ ', prefix: true, zeroDecimal: true },
+  15: { code: 'VND', symbol: '₫', prefix: false, zeroDecimal: true, steamWholeUnitsOnly: true },
+  16: { code: 'KRW', symbol: '₩ ', prefix: true, zeroDecimal: true, steamWholeUnitsOnly: true },
   17: { code: 'TRY', symbol: ' TL', prefix: false },
-  18: { code: 'UAH', symbol: '₴', prefix: false },
+  18: { code: 'UAH', symbol: '₴', prefix: false, steamWholeUnitsOnly: true },
   19: { code: 'MXN', symbol: 'Mex$ ', prefix: true },
   20: { code: 'CAD', symbol: 'CDN$ ', prefix: true },
   21: { code: 'AUD', symbol: 'A$ ', prefix: true },
   22: { code: 'NZD', symbol: 'NZ$ ', prefix: true },
   23: { code: 'CNY', symbol: '¥ ', prefix: true },
-  24: { code: 'INR', symbol: '₹ ', prefix: true },
-  25: { code: 'CLP', symbol: 'CLP$ ', prefix: true, zeroDecimal: true },
+  24: { code: 'INR', symbol: '₹ ', prefix: true, steamWholeUnitsOnly: true },
+  25: { code: 'CLP', symbol: 'CLP$ ', prefix: true, zeroDecimal: true, steamWholeUnitsOnly: true },
   26: { code: 'PEN', symbol: 'S/.', prefix: true },
-  27: { code: 'COP', symbol: 'COL$ ', prefix: true, zeroDecimal: true },
+  27: { code: 'COP', symbol: 'COL$ ', prefix: true, zeroDecimal: true, steamWholeUnitsOnly: true },
   28: { code: 'ZAR', symbol: 'R ', prefix: true },
   29: { code: 'HKD', symbol: 'HK$ ', prefix: true },
-  30: { code: 'TWD', symbol: 'NT$ ', prefix: true, zeroDecimal: true },
+  30: { code: 'TWD', symbol: 'NT$ ', prefix: true, zeroDecimal: true, steamWholeUnitsOnly: true },
   31: { code: 'SAR', symbol: ' SR', prefix: false },
   32: { code: 'AED', symbol: ' AED', prefix: false },
-  37: { code: 'KZT', symbol: '₸', prefix: false },
+  33: { code: 'SEK', symbol: ' kr', prefix: false },
+  34: { code: 'ARS', symbol: 'ARS$ ', prefix: true },
+  35: { code: 'ILS', symbol: '₪', prefix: true },
+  36: { code: 'BYN', symbol: 'Br', prefix: true },
+  37: { code: 'KZT', symbol: '₸', prefix: false, steamWholeUnitsOnly: true },
+  38: { code: 'KWD', symbol: ' KD', prefix: false },
+  39: { code: 'QAR', symbol: ' QR', prefix: false },
+  40: { code: 'CRC', symbol: '₡', prefix: true, zeroDecimal: true, steamWholeUnitsOnly: true },
+  41: { code: 'UYU', symbol: '$U', prefix: true, zeroDecimal: true, steamWholeUnitsOnly: true },
+  42: { code: 'BGN', symbol: ' лв', prefix: false },
+  44: { code: 'CZK', symbol: ' Kč', prefix: false },
+  45: { code: 'DKK', symbol: ' kr.', prefix: false },
+  46: { code: 'HUF', symbol: ' Ft', prefix: false },
+  47: { code: 'RON', symbol: ' lei', prefix: false },
 };
 
 export function createWalletFeeConfig(rawWallet?: Record<string, unknown> | null): WalletFeeConfig {
+  const walletDetected = Boolean(rawWallet && Number(rawWallet.wallet_currency) > 0);
   const currency = Number(rawWallet?.wallet_currency) || 23;
   const meta = CURRENCY_META[currency] || { code: 'CNY', symbol: '¥ ', prefix: true };
-  const country = typeof rawWallet?.wallet_country === 'string' && rawWallet.wallet_country
-    ? rawWallet.wallet_country
-    : 'CN';
+  const country =
+    typeof rawWallet?.wallet_country === 'string' && rawWallet.wallet_country
+      ? rawWallet.wallet_country
+      : 'CN';
 
   const steamFeePercent = parseFloat(String(rawWallet?.wallet_fee_percent ?? '0.05'));
   const publisherFeePercentDefault = parseFloat(
@@ -68,6 +91,7 @@ export function createWalletFeeConfig(rawWallet?: Record<string, unknown> | null
 
   return {
     currency,
+    currencyCode: meta.code,
     country,
     steamFeePercent: Number.isFinite(steamFeePercent) ? steamFeePercent : 0.05,
     publisherFeePercentDefault: Number.isFinite(publisherFeePercentDefault)
@@ -78,20 +102,28 @@ export function createWalletFeeConfig(rawWallet?: Record<string, unknown> | null
     currencySymbol: meta.symbol,
     symbolPrefix: meta.prefix,
     zeroDecimal: Boolean(meta.zeroDecimal),
+    steamWholeUnitsHint: Boolean(meta.steamWholeUnitsOnly),
+    walletDetected,
   };
+}
+
+function getUnitStep(wallet: WalletFeeConfig, forceWholeUnits?: boolean): number {
+  return wallet.zeroDecimal || forceWholeUnits ? 100 : 1;
 }
 
 /**
  * Forward Steam Market fee calculation:
  * Given sellerReceivesCents, returns exact steamFee, publisherFee, and buyerPaysCents.
- * Matches Steam's economy_v2.js CalculateAmountToSendForDesiredReceivedAmount.
+ * Matches Steam's economy.js CalculateAmountToSendForDesiredReceivedAmount.
  */
 export function calculateBuyerPaysFromSellerReceives(
   sellerReceivesCents: number,
   publisherFeePercent: number,
   wallet: WalletFeeConfig,
+  forceWholeUnits?: boolean,
 ): CalculatedListingPrice {
-  const received = Math.max(1, Math.floor(sellerReceivesCents));
+  const step = getUnitStep(wallet, forceWholeUnits);
+  const received = Math.max(step, Math.floor(sellerReceivesCents / step) * step);
   const steamFee = Math.floor(
     Math.max(received * wallet.steamFeePercent, wallet.feeMinimum) + wallet.feeBase,
   );
@@ -115,25 +147,32 @@ export function calculateBuyerPaysFromSellerReceives(
 export function getMinimumBuyerPriceCents(
   publisherFeePercent: number,
   wallet: WalletFeeConfig,
+  forceWholeUnits?: boolean,
 ): number {
-  const minReceived = wallet.zeroDecimal ? Math.max(100, wallet.feeMinimum) : 1;
-  return calculateBuyerPaysFromSellerReceives(minReceived, publisherFeePercent, wallet)
+  const step = getUnitStep(wallet, forceWholeUnits);
+  return calculateBuyerPaysFromSellerReceives(step, publisherFeePercent, wallet, forceWholeUnits)
     .buyerPaysCents;
 }
 
 /**
  * Inverse Steam Market fee calculation:
- * Given desired buyerPaysCents, computes the maximum sellerReceivesCents such that
- * actualBuyerPays <= desiredBuyerPaysCents (falling back to minimum valid price if below minimum).
- * Matches Steam's economy_v2.js CalculateFeeAmount behavior including fee-gap handling.
+ * Given desired buyerPaysCents, computes the maximum valid sellerReceivesCents (snapped to
+ * currency unitStep) such that actualBuyerPays <= desiredBuyerPaysCents.
+ * Matches Steam's economy.js CalculateFeeAmount behavior including fee-gap & whole-unit handling.
  */
 export function calculateSellerReceivesFromBuyerPays(
   desiredBuyerPaysCents: number,
   publisherFeePercent: number,
   wallet: WalletFeeConfig,
+  forceWholeUnits?: boolean,
 ): CalculatedListingPrice {
-  const minUnit = wallet.zeroDecimal ? Math.max(100, wallet.feeMinimum) : 1;
-  const minCalc = calculateBuyerPaysFromSellerReceives(minUnit, publisherFeePercent, wallet);
+  const step = getUnitStep(wallet, forceWholeUnits);
+  const minCalc = calculateBuyerPaysFromSellerReceives(
+    step,
+    publisherFeePercent,
+    wallet,
+    forceWholeUnits,
+  );
   const target = Math.floor(desiredBuyerPaysCents);
 
   if (target <= minCalc.buyerPaysCents) {
@@ -141,28 +180,43 @@ export function calculateSellerReceivesFromBuyerPays(
   }
 
   const totalRate = wallet.steamFeePercent + (publisherFeePercent > 0 ? publisherFeePercent : 0);
-  let estimated = Math.max(
-    minUnit,
+  const rawEstimated = Math.max(
+    step,
     Math.floor((target - wallet.feeBase) / (1 + totalRate)),
   );
+  let estimated = Math.max(step, Math.floor(rawEstimated / step) * step);
 
-  // Align to step for zero-decimal currencies if needed
-  let current = calculateBuyerPaysFromSellerReceives(estimated, publisherFeePercent, wallet);
+  let current = calculateBuyerPaysFromSellerReceives(
+    estimated,
+    publisherFeePercent,
+    wallet,
+    forceWholeUnits,
+  );
 
   // Step down if we overshot target
   let guard = 0;
-  while (current.buyerPaysCents > target && estimated > minUnit && guard < 100) {
-    estimated -= 1;
-    current = calculateBuyerPaysFromSellerReceives(estimated, publisherFeePercent, wallet);
+  while (current.buyerPaysCents > target && estimated > step && guard < 200) {
+    estimated = Math.max(step, estimated - step);
+    current = calculateBuyerPaysFromSellerReceives(
+      estimated,
+      publisherFeePercent,
+      wallet,
+      forceWholeUnits,
+    );
     guard += 1;
   }
 
   // Step up while next candidate still does not exceed target
   guard = 0;
-  while (guard < 100) {
-    const next = calculateBuyerPaysFromSellerReceives(estimated + 1, publisherFeePercent, wallet);
+  while (guard < 200) {
+    const next = calculateBuyerPaysFromSellerReceives(
+      estimated + step,
+      publisherFeePercent,
+      wallet,
+      forceWholeUnits,
+    );
     if (next.buyerPaysCents <= target) {
-      estimated += 1;
+      estimated += step;
       current = next;
     } else {
       break;
@@ -185,16 +239,23 @@ export function resolveStrategyPrice(
   wallet: WalletFeeConfig,
   customOptions?: CustomPriceOptions,
 ): CalculatedListingPrice | null {
+  const forceWhole = Boolean(customOptions?.roundToWholeUnits);
+
   if (
     manualBuyerPriceCents !== null &&
     Number.isFinite(manualBuyerPriceCents) &&
     manualBuyerPriceCents > 0
   ) {
-    return calculateSellerReceivesFromBuyerPays(manualBuyerPriceCents, publisherFeePercent, wallet);
+    return calculateSellerReceivesFromBuyerPays(
+      manualBuyerPriceCents,
+      publisherFeePercent,
+      wallet,
+      forceWhole,
+    );
   }
 
-  const step = wallet.zeroDecimal ? Math.max(100, wallet.feeMinimum) : 1;
-  const minBuyer = getMinimumBuyerPriceCents(publisherFeePercent, wallet);
+  const step = getUnitStep(wallet, forceWhole);
+  const minBuyer = getMinimumBuyerPriceCents(publisherFeePercent, wallet, forceWhole);
 
   if (strategy === 'custom' && customOptions) {
     switch (customOptions.mode) {
@@ -206,30 +267,34 @@ export function resolveStrategyPrice(
           Math.max(minBuyer, Math.floor(customOptions.fixedPriceCents)),
           publisherFeePercent,
           wallet,
+          forceWhole,
         );
       }
       case 'fixed_seller': {
         if (!Number.isFinite(customOptions.fixedPriceCents) || customOptions.fixedPriceCents <= 0) {
           return null;
         }
-        const minSeller = wallet.zeroDecimal ? Math.max(100, wallet.feeMinimum) : 1;
         return calculateBuyerPaysFromSellerReceives(
-          Math.max(minSeller, Math.floor(customOptions.fixedPriceCents)),
+          Math.max(step, Math.floor(customOptions.fixedPriceCents)),
           publisherFeePercent,
           wallet,
+          forceWhole,
         );
       }
       case 'offset_lowest_sell': {
         if (!quote || quote.lowestSellCents === null) return null;
-        const target = Math.max(minBuyer, Math.round(quote.lowestSellCents + customOptions.offsetCents));
-        return calculateSellerReceivesFromBuyerPays(target, publisherFeePercent, wallet);
+        const target = Math.max(
+          minBuyer,
+          Math.round(quote.lowestSellCents + customOptions.offsetCents),
+        );
+        return calculateSellerReceivesFromBuyerPays(target, publisherFeePercent, wallet, forceWhole);
       }
       case 'percent_lowest_sell': {
         if (!quote || quote.lowestSellCents === null) return null;
         if (!Number.isFinite(customOptions.percent) || customOptions.percent <= 0) return null;
         const scaled = Math.round((quote.lowestSellCents * customOptions.percent) / 100);
         const target = Math.max(minBuyer, scaled);
-        return calculateSellerReceivesFromBuyerPays(target, publisherFeePercent, wallet);
+        return calculateSellerReceivesFromBuyerPays(target, publisherFeePercent, wallet, forceWhole);
       }
     }
   }
@@ -260,11 +325,11 @@ export function resolveStrategyPrice(
     return null;
   }
 
-  return calculateSellerReceivesFromBuyerPays(targetBuyer, publisherFeePercent, wallet);
+  return calculateSellerReceivesFromBuyerPays(targetBuyer, publisherFeePercent, wallet, forceWhole);
 }
 
 /**
- * Parses formatted Steam price strings like "¥ 0.28", "$1,234.56", "1.234,56€", "12,--€", "¥ 150"
+ * Parses formatted Steam price strings like "¥ 0.28", "$1,234.56", "1.234,56€", "12,--€", "45,90 руб."
  * into integer minor currency units (cents).
  */
 export function parseSteamPriceToCents(priceStr: string | null | undefined): number | null {
@@ -272,8 +337,6 @@ export function parseSteamPriceToCents(priceStr: string | null | undefined): num
     return null;
   }
 
-  // Handle European "--" for ".00" (e.g. "12,--€"), then keep only the numeric core
-  // so currency abbreviations with dots like "45,90 pуб." or "S/. 12.50" don't confuse decimal detection.
   const normalized = priceStr.trim().replace(/--/g, '00');
   const numericCore = normalized.replace(/^[^0-9]+|[^0-9]+$/g, '');
   const cleaned = numericCore.replace(/[^0-9.,]/g, '');
@@ -287,7 +350,6 @@ export function parseSteamPriceToCents(priceStr: string | null | undefined): num
   let majorMinorNumber: number;
 
   if (lastDot !== -1 && lastComma !== -1) {
-    // Both present: whichever appears last is the decimal separator
     if (lastDot > lastComma) {
       majorMinorNumber = parseFloat(cleaned.replace(/,/g, ''));
     } else {
@@ -296,16 +358,13 @@ export function parseSteamPriceToCents(priceStr: string | null | undefined): num
   } else if (lastComma !== -1) {
     const afterComma = cleaned.slice(lastComma + 1);
     if (afterComma.length === 2 || afterComma.length === 1) {
-      // Decimal comma, e.g. "12,50" or "0,28"
       majorMinorNumber = parseFloat(cleaned.replace(',', '.'));
     } else {
-      // Thousands separator, e.g. "1,250"
       majorMinorNumber = parseFloat(cleaned.replace(/,/g, ''));
     }
   } else if (lastDot !== -1) {
     const afterDot = cleaned.slice(lastDot + 1);
     if (afterDot.length === 3 && cleaned.indexOf('.') === lastDot && cleaned.length > 4) {
-      // Ambiguous thousands separator like "1.250" (often IDR/EUR/CLP)
       majorMinorNumber = parseFloat(cleaned.replace(/\./g, ''));
     } else {
       majorMinorNumber = parseFloat(cleaned);
@@ -374,6 +433,61 @@ export function signedInputValueToCents(input: string): number | null {
     return null;
   }
   return Math.round(num * 100);
+}
+
+/**
+ * Convert wallet currency cents to CNY yuan using exchange rate `1 <walletCurrency> = rateToCny CNY`.
+ */
+export function centsToCnyYuan(
+  cents: number | null | undefined,
+  rateToCny: number | null | undefined,
+): number | null {
+  if (
+    cents === null ||
+    cents === undefined ||
+    !Number.isFinite(cents) ||
+    rateToCny === null ||
+    rateToCny === undefined ||
+    !Number.isFinite(rateToCny) ||
+    rateToCny <= 0
+  ) {
+    return null;
+  }
+  return (cents / 100) * rateToCny;
+}
+
+export function formatCnyYuan(yuan: number | null | undefined): string {
+  if (yuan === null || yuan === undefined || !Number.isFinite(yuan)) {
+    return '--';
+  }
+  return `¥${yuan.toFixed(2)}`;
+}
+
+/**
+ * Computes 余额率 = 成本价(CNY) / 实际获得价(CNY), formatted to 3 decimal places.
+ * Example: cost = 1 CNY, seller net = 1.5 CNY -> ratio = 0.6666... -> "0.667".
+ */
+export function calculateBalanceRatio(
+  costPriceCny: number | null | undefined,
+  sellerReceivesCnyYuan: number | null | undefined,
+): { ratio: number; formatted: string } | null {
+  if (
+    costPriceCny === null ||
+    costPriceCny === undefined ||
+    !Number.isFinite(costPriceCny) ||
+    costPriceCny <= 0 ||
+    sellerReceivesCnyYuan === null ||
+    sellerReceivesCnyYuan === undefined ||
+    !Number.isFinite(sellerReceivesCnyYuan) ||
+    sellerReceivesCnyYuan <= 0
+  ) {
+    return null;
+  }
+  const ratio = costPriceCny / sellerReceivesCnyYuan;
+  return {
+    ratio,
+    formatted: ratio.toFixed(3),
+  };
 }
 
 export function getCustomModeLabel(mode: CustomPriceMode): string {

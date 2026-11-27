@@ -1,4 +1,9 @@
 import {
+  fetchDailyExchangeRateToCny,
+  getSavedCostPriceCny,
+  saveCostPriceCny,
+} from './exchange-rate';
+import {
   getActiveAppIdFromPage,
   getAvailableGameTabs,
   groupInventoryAssets,
@@ -23,9 +28,12 @@ import {
   computeNextSellDelayMs,
 } from './pacing';
 import {
+  calculateBalanceRatio,
+  centsToCnyYuan,
   centsToInputValue,
   createWalletFeeConfig,
   formatCents,
+  formatCnyYuan,
   getStrategyLabel,
   inputValueToCents,
   resolveStrategyPrice,
@@ -37,6 +45,7 @@ import { PLUGIN_STYLES } from './styles';
 import type {
   CalculatedListingPrice,
   CustomPriceMode,
+  ExchangeRateInfo,
   ItemGroup,
   PluginSettings,
   PricingStrategy,
@@ -78,6 +87,8 @@ function nowTimeStr(): string {
 export class BatchListerUI {
   private settings: PluginSettings | null = null;
   private wallet: WalletFeeConfig = createWalletFeeConfig(null);
+  private fxRate: ExchangeRateInfo | null = null;
+  private isLoadingFx = false;
   private groups: ItemGroup[] = [];
   private gameTabs: DetectedGameTab[] = [];
   private currentAppId = 0;
@@ -183,6 +194,8 @@ export class BatchListerUI {
             <h2 class="smbl-title">⚡ Steam 市场批量上架助手</h2>
             <span class="smbl-badge" id="smbl-app-badge">等待扫描</span>
             <span class="smbl-badge" id="smbl-wallet-badge"></span>
+            <span class="smbl-fx-badge" id="smbl-fx-badge" title="点击可手动设定自定义汇率（留空恢复每日自动查询）">💱 汇率加载中...</span>
+            <button type="button" class="smbl-btn smbl-btn-ghost" id="smbl-fx-refresh-btn" title="强制刷新今日实时汇率" style="padding:2px 6px;font-size:11px;">↻</button>
           </div>
           <div class="smbl-header-actions">
             <button type="button" class="smbl-btn" id="smbl-rescan-btn">🔄 扫描当前库存</button>
@@ -270,6 +283,10 @@ export class BatchListerUI {
             低价警告(&lt;%):
             <input type="number" min="0" max="95" step="5" class="smbl-mini-input" style="width:50px;" id="smbl-opt-low-warn" />
           </label>
+          <label class="smbl-check-label" title="将提交给 Steam 的实收价对齐到整数货币单位（如卢比/卢布去小数，避免部分地区小数取整误差）">
+            <input type="checkbox" id="smbl-opt-whole-units" />
+            整数上架
+          </label>
         </div>
 
         <div class="smbl-body">
@@ -279,12 +296,14 @@ export class BatchListerUI {
                 <tr>
                   <th style="width: 34px; text-align: center;">选</th>
                   <th>物品名称（可上架）</th>
-                  <th style="width: 92px;">上架数量</th>
-                  <th style="width: 86px;">最低卖价</th>
-                  <th style="width: 86px;">最高求购</th>
-                  <th style="width: 112px;">买家付(上架价)</th>
-                  <th style="width: 88px;">预计实收</th>
-                  <th style="width: 58px; text-align: center;">查价</th>
+                  <th style="width: 104px;">上架 / 库存</th>
+                  <th style="width: 82px;">最低卖价</th>
+                  <th style="width: 82px;">最高求购</th>
+                  <th style="width: 116px;">买家付(上架价)</th>
+                  <th style="width: 92px;">预计实收</th>
+                  <th style="width: 84px;">成本价(¥)</th>
+                  <th style="width: 66px;">余额率</th>
+                  <th style="width: 48px; text-align: center;">查价</th>
                 </tr>
               </thead>
               <tbody id="smbl-tbody"></tbody>
@@ -363,6 +382,39 @@ export class BatchListerUI {
       void this.scanCurrentInventory();
     });
 
+    $<HTMLButtonElement>('smbl-fx-refresh-btn').addEventListener('click', () => {
+      if (this.settings && this.settings.manualFxRateToCny > 0) {
+        this.settings.manualFxRateToCny = 0;
+        void saveSettings(this.settings);
+      }
+      void this.refreshExchangeRate(true);
+    });
+
+    $<HTMLSpanElement>('smbl-fx-badge').addEventListener('click', () => {
+      if (!this.settings || this.wallet.currencyCode === 'CNY') return;
+      const curText = this.fxRate ? String(this.fxRate.rateToCny) : '';
+      const input = window.prompt(
+        `输入自定义汇率（1 ${this.wallet.currencyCode} = ? 人民币 CNY），留空并确定则恢复每日自动查询：`,
+        this.settings.manualFxRateToCny > 0 ? String(this.settings.manualFxRateToCny) : curText,
+      );
+      if (input === null) return;
+      const trimmed = input.trim();
+      if (!trimmed) {
+        this.settings.manualFxRateToCny = 0;
+        void saveSettings(this.settings);
+        void this.refreshExchangeRate(false);
+        return;
+      }
+      const val = Number(trimmed);
+      if (Number.isFinite(val) && val > 0 && val <= 1000) {
+        this.settings.manualFxRateToCny = val;
+        void saveSettings(this.settings);
+        void this.refreshExchangeRate(false);
+      } else {
+        this.addLog('warn', '输入的汇率格式无效，请填写大于 0 的数字');
+      }
+    });
+
     $<HTMLInputElement>('smbl-search-input').addEventListener('input', (e) => {
       this.searchQuery = (e.target as HTMLInputElement).value.trim().toLowerCase();
       this.renderTable();
@@ -397,7 +449,7 @@ export class BatchListerUI {
       this.renderSummary();
     });
 
-    $<HTMLInputElement>('smbl-custom-val-input').addEventListener('input', (e) => {
+    const onCustomValChanged = (e: Event) => {
       if (!this.settings) return;
       const raw = (e.target as HTMLInputElement).value;
       const mode = this.settings.customPriceMode;
@@ -420,9 +472,13 @@ export class BatchListerUI {
           void saveSettings(this.settings);
         }
       }
+      this.syncSettingsControls();
       this.renderTable();
       this.renderSummary();
-    });
+    };
+    const customValInputEl = $<HTMLInputElement>('smbl-custom-val-input');
+    customValInputEl.addEventListener('input', onCustomValChanged);
+    customValInputEl.addEventListener('change', onCustomValChanged);
 
     $<HTMLButtonElement>('smbl-apply-custom-selected-btn').addEventListener('click', () => {
       if (!this.settings) return;
@@ -540,6 +596,15 @@ export class BatchListerUI {
       this.renderTable();
     });
 
+    $<HTMLInputElement>('smbl-opt-whole-units').addEventListener('change', (e) => {
+      if (!this.settings) return;
+      this.settings.roundToWholeUnits = (e.target as HTMLInputElement).checked;
+      void saveSettings(this.settings);
+      this.syncSettingsControls();
+      this.renderTable();
+      this.renderSummary();
+    });
+
     $<HTMLInputElement>('smbl-opt-skip-mod').addEventListener('change', (e) => {
       if (!this.settings) return;
       this.settings.skipModified = (e.target as HTMLInputElement).checked;
@@ -650,6 +715,20 @@ export class BatchListerUI {
         group.manualBuyerPriceCents = cents;
         this.renderTable();
         this.renderSummary();
+      } else if (target.classList.contains('smbl-cost-input')) {
+        const raw = target.value.trim().replace(/,/g, '.');
+        const num = raw ? Number(raw) : NaN;
+        const costCny = Number.isFinite(num) && num > 0 ? num : null;
+        group.costPriceCny = costCny;
+        saveCostPriceCny(group.appid, group.marketHashName, costCny);
+        // Sync identical marketHashName groups (e.g. split modified copies)
+        for (const other of this.groups) {
+          if (other !== group && other.appid === group.appid && other.marketHashName === group.marketHashName) {
+            other.costPriceCny = costCny;
+          }
+        }
+        this.renderTable();
+        this.renderSummary();
       }
     });
 
@@ -691,12 +770,39 @@ export class BatchListerUI {
     this.backdropEl?.classList.add('smbl-open');
     this.wallet = createWalletFeeConfig(ctx.walletInfo);
     this.renderWalletBadge();
+    void this.refreshExchangeRate(false);
 
     if (this.groups.length === 0 || getActiveAppIdFromPage() !== this.currentAppId) {
       void this.scanCurrentInventory();
     } else {
       this.gameTabs = getAvailableGameTabs();
       this.renderGameTabs();
+    }
+  }
+
+  private async refreshExchangeRate(forceRefresh: boolean): Promise<void> {
+    if (this.isLoadingFx) return;
+    this.isLoadingFx = true;
+    this.renderFxBadge();
+    try {
+      const info = await fetchDailyExchangeRateToCny(this.wallet.currencyCode, {
+        forceRefresh,
+        manualOverrideRate: this.settings?.manualFxRateToCny || 0,
+      });
+      this.fxRate = info;
+      if (info && this.wallet.currencyCode !== 'CNY') {
+        this.addLog(
+          'info',
+          `汇率已更新：1 ${info.currencyCode} = ¥${info.rateToCny.toFixed(4)} (${info.date} · ${info.source})`,
+        );
+      } else if (!info && this.wallet.currencyCode !== 'CNY') {
+        this.addLog('warn', `获取 ${this.wallet.currencyCode}→CNY 汇率失败，可点击顶部汇率标签手动填写`);
+      }
+    } finally {
+      this.isLoadingFx = false;
+      this.renderFxBadge();
+      this.renderTable();
+      this.renderSummary();
     }
   }
 
@@ -735,6 +841,9 @@ export class BatchListerUI {
       const ctx = resolveSteamPageContext();
       this.wallet = createWalletFeeConfig(ctx.walletInfo);
       this.renderWalletBadge();
+      if (!this.fxRate || this.fxRate.currencyCode !== this.wallet.currencyCode) {
+        void this.refreshExchangeRate(false);
+      }
 
       const result = await loadActiveSteamInventory(this.wallet);
       this.currentAppId = result.appid;
@@ -744,11 +853,14 @@ export class BatchListerUI {
         keepOneDuplicate: this.settings?.keepOneDuplicate,
         skipModified: this.settings?.skipModified,
       });
+      for (const g of this.groups) {
+        g.costPriceCny = getSavedCostPriceCny(g.appid, g.marketHashName);
+      }
       this.gameTabs = getAvailableGameTabs();
 
       this.addLog(
         'ok',
-        `扫描完成 [${this.currentAppName}]：共 ${this.totalScannedAssets} 件物品，其中可上架 ${result.assets.length} 件（合并为 ${this.groups.length} 组）`,
+        `扫描完成 [${this.currentAppName}]：共 ${this.totalScannedAssets} 件，可上架 ${result.assets.length} 件（${this.groups.length} 组）｜钱包 ${this.wallet.currencyCode}${this.wallet.walletDetected ? '' : '(未检测到，使用默认)'} 费率 ${(this.wallet.steamFeePercent * 100).toFixed(0)}%+${(this.wallet.publisherFeePercentDefault * 100).toFixed(0)}%`,
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -816,7 +928,16 @@ export class BatchListerUI {
       fixedPriceCents: this.settings.customFixedPriceCents,
       offsetCents: this.settings.customOffsetCents,
       percent: this.settings.customPercent,
+      roundToWholeUnits: this.settings.roundToWholeUnits,
     };
+  }
+
+  private getEffectiveFxRate(): number | null {
+    if (this.wallet.currencyCode === 'CNY') return 1;
+    if (this.settings && this.settings.manualFxRateToCny > 0) {
+      return this.settings.manualFxRateToCny;
+    }
+    return this.fxRate?.rateToCny ?? null;
   }
 
   private getEffectivePrice(group: ItemGroup): CalculatedListingPrice | null {
@@ -1159,20 +1280,44 @@ export class BatchListerUI {
     }
 
     // Group preview lines
-    const previewMap = new Map<string, { name: string; count: number; buyer: number; seller: number }>();
+    const previewMap = new Map<
+      string,
+      { name: string; count: number; buyer: number; seller: number; costCny: number | null }
+    >();
+    const groupByKey = new Map(this.groups.map((g) => [g.groupKey, g]));
     for (const item of summary.plan) {
       const existing = previewMap.get(item.groupKey);
       if (existing) {
         existing.count += 1;
       } else {
+        const g = groupByKey.get(item.groupKey);
         previewMap.set(item.groupKey, {
           name: item.displayName,
           count: 1,
           buyer: item.buyerPaysCents,
           seller: item.sellerReceivesCents,
+          costCny: g?.costPriceCny ?? null,
         });
       }
     }
+
+    const fx = this.getEffectiveFxRate();
+    const isNonCny = this.wallet.currencyCode !== 'CNY';
+    const totalBuyerCny = centsToCnyYuan(summary.totalBuyerCents, fx);
+    const totalSellerCny = centsToCnyYuan(summary.totalSellerCents, fx);
+
+    let costCoveredCostCny = 0;
+    let costCoveredSellerCny = 0;
+    for (const r of previewMap.values()) {
+      if (r.costCny !== null && r.costCny > 0) {
+        const netYuan = centsToCnyYuan(r.seller, fx);
+        if (netYuan !== null && netYuan > 0) {
+          costCoveredCostCny += r.costCny * r.count;
+          costCoveredSellerCny += netYuan * r.count;
+        }
+      }
+    }
+    const overallRatio = calculateBalanceRatio(costCoveredCostCny, costCoveredSellerCny);
 
     const previewRows = Array.from(previewMap.values()).slice(0, 60);
     const moreCount = previewMap.size - previewRows.length;
@@ -1185,14 +1330,29 @@ export class BatchListerUI {
         }${this.settings.circuitBreakerMax429 > 0 ? ` · 连续 ${this.settings.circuitBreakerMax429} 次 429 自动熔断` : ''}`
       : `固定间隔 ${this.settings.sellDelayMs}ms`;
 
+    const fxLine =
+      isNonCny && fx !== null
+        ? `<div style="margin-top:4px;font-size:12px;color:#93e2ff;">当前汇率：1 ${escapeHtml(this.wallet.currencyCode)} = ¥${fx.toFixed(4)}${this.fxRate ? `（${escapeHtml(this.fxRate.date)} · ${escapeHtml(this.fxRate.source)}）` : ''}</div>`
+        : '';
+
     modalBody.innerHTML = `
       <div>当前库存：<strong>${escapeHtml(this.currentAppName)}</strong> ｜ 定价策略：<strong>${escapeHtml(getStrategyLabel(this.settings.strategy, this.getCustomPriceOptions()))}</strong></div>
       <div style="margin-top:4px;font-size:12px;color:#86efac;">防风控节奏：${escapeHtml(pacingDesc)}</div>
+      ${fxLine}
       <div style="margin-top:6px;">
         即将上架：<strong>${summary.plan.length}</strong> 件 ｜
-        预计买家总付：<strong class="smbl-price-sell">${escapeHtml(formatCents(summary.totalBuyerCents, this.wallet))}</strong> ｜
-        预计实收总额：<strong class="smbl-price-net">${escapeHtml(formatCents(summary.totalSellerCents, this.wallet))}</strong>
+        预计买家总付：<strong class="smbl-price-sell">${escapeHtml(formatCents(summary.totalBuyerCents, this.wallet))}</strong>${isNonCny && totalBuyerCny !== null ? ` <span class="smbl-muted">(≈${escapeHtml(formatCnyYuan(totalBuyerCny))})</span>` : ''} ｜
+        预计实收总额：<strong class="smbl-price-net">${escapeHtml(formatCents(summary.totalSellerCents, this.wallet))}</strong>${isNonCny && totalSellerCny !== null ? ` <span class="smbl-muted">(≈${escapeHtml(formatCnyYuan(totalSellerCny))})</span>` : ''}
       </div>
+      ${
+        overallRatio
+          ? `<div style="margin-top:4px;font-size:12.5px;">
+              已填成本合计：<strong>${escapeHtml(formatCnyYuan(costCoveredCostCny))}</strong> ｜
+              对应实收：<strong>${escapeHtml(formatCnyYuan(costCoveredSellerCny))}</strong> ｜
+              综合余额率：<strong class="${overallRatio.ratio <= 0.72 ? 'smbl-ratio-good' : overallRatio.ratio <= 0.85 ? 'smbl-ratio-mid' : 'smbl-ratio-warn'}">${overallRatio.formatted}</strong>
+            </div>`
+          : ''
+      }
       ${
         summary.abnormalLowItems.length > 0
           ? `<div style="margin-top:8px;padding:8px 10px;border-radius:4px;background:rgba(220,38,38,0.18);border:1px solid rgba(248,113,113,0.55);color:#fecaca;">
@@ -1221,15 +1381,20 @@ export class BatchListerUI {
       }
       <div class="smbl-modal-list">
         ${previewRows
-          .map(
-            (r) => `
+          .map((r) => {
+            const sellerCny = centsToCnyYuan(r.seller, fx);
+            const ratioObj = calculateBalanceRatio(r.costCny, sellerCny);
+            const cnyPart =
+              isNonCny && sellerCny !== null ? ` (实收≈${formatCnyYuan(sellerCny)})` : '';
+            const ratioPart = ratioObj ? ` · 余额率 ${ratioObj.formatted}` : '';
+            return `
           <div class="smbl-modal-row">
             <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(r.name)} × ${r.count}</span>
             <span class="smbl-num" style="flex-shrink:0;">
-              标价 ${escapeHtml(formatCents(r.buyer, this.wallet))} / 实收 ${escapeHtml(formatCents(r.seller, this.wallet))}
+              标价 ${escapeHtml(formatCents(r.buyer, this.wallet))} / 实收 ${escapeHtml(formatCents(r.seller, this.wallet))}${escapeHtml(cnyPart + ratioPart)}
             </span>
-          </div>`,
-          )
+          </div>`;
+          })
           .join('')}
         ${moreCount > 0 ? `<div class="smbl-muted" style="padding-top:4px;">... 其余 ${moreCount} 组已省略</div>` : ''}
       </div>
@@ -1312,17 +1477,23 @@ export class BatchListerUI {
         if (res.ok) {
           consecutive429 = 0;
           batchProcessedSinceRest += 1;
+          const fx = this.getEffectiveFxRate();
+          const netCny = centsToCnyYuan(task.sellerReceivesCents, fx);
+          const cnyNote =
+            this.wallet.currencyCode !== 'CNY' && netCny !== null
+              ? ` ≈ ${formatCnyYuan(netCny)}`
+              : '';
           if (res.requiresConfirmation) {
             listedNeedConfirm += 1;
             this.addLog(
               'ok',
-              `[待令牌确认] ${task.displayName} | 标价 ${formatCents(task.buyerPaysCents, this.wallet)} (实收 ${formatCents(task.sellerReceivesCents, this.wallet)})`,
+              `[待令牌确认] ${task.displayName} | 标价 ${formatCents(task.buyerPaysCents, this.wallet)} / 实收 ${formatCents(task.sellerReceivesCents, this.wallet)}${cnyNote} (price=${task.sellerReceivesCents})`,
             );
           } else {
             listedDirect += 1;
             this.addLog(
               'ok',
-              `[已上架] ${task.displayName} | 标价 ${formatCents(task.buyerPaysCents, this.wallet)} (实收 ${formatCents(task.sellerReceivesCents, this.wallet)})`,
+              `[已上架] ${task.displayName} | 标价 ${formatCents(task.buyerPaysCents, this.wallet)} / 实收 ${formatCents(task.sellerReceivesCents, this.wallet)}${cnyNote} (price=${task.sellerReceivesCents})`,
             );
           }
           this.removeSoldAssetFromGroups(task.groupKey, task.assetid);
@@ -1448,6 +1619,7 @@ export class BatchListerUI {
     const restMin = document.getElementById('smbl-opt-rest-min') as HTMLInputElement | null;
     const restMax = document.getElementById('smbl-opt-rest-max') as HTMLInputElement | null;
     const lowWarn = document.getElementById('smbl-opt-low-warn') as HTMLInputElement | null;
+    const wholeUnits = document.getElementById('smbl-opt-whole-units') as HTMLInputElement | null;
     const skipMod = document.getElementById('smbl-opt-skip-mod') as HTMLInputElement | null;
     const keepOne = document.getElementById('smbl-opt-keep-one') as HTMLInputElement | null;
     const threshold = document.getElementById('smbl-opt-threshold') as HTMLInputElement | null;
@@ -1463,6 +1635,7 @@ export class BatchListerUI {
     if (restMin) restMin.value = String(this.settings.batchRestMinSec);
     if (restMax) restMax.value = String(this.settings.batchRestMaxSec);
     if (lowWarn) lowWarn.value = String(this.settings.lowPriceWarnPercent);
+    if (wholeUnits) wholeUnits.checked = this.settings.roundToWholeUnits;
     if (skipMod) skipMod.checked = this.settings.skipModified;
     if (keepOne) keepOne.checked = this.settings.keepOneDuplicate;
     if (threshold) threshold.value = String(Math.round(this.settings.highValueThresholdCents / 100));
@@ -1493,17 +1666,41 @@ export class BatchListerUI {
       if (mode === 'fixed_buyer') {
         customValPrefix.textContent = '买家付:';
         customValSuffix.textContent = this.wallet.currencySymbol.trim() || '元';
-        customValInput.step = this.wallet.zeroDecimal ? '1' : '0.01';
+        customValInput.step = this.wallet.zeroDecimal || this.settings.roundToWholeUnits ? '1' : '0.01';
         customValInput.min = '0.01';
         if (!isFocused) customValInput.value = centsToInputValue(this.settings.customFixedPriceCents, this.wallet);
-        customHint.textContent = '无需查价，所有选中物品统一按此挂单价出售';
+        const preview = resolveStrategyPrice(
+          'custom',
+          null,
+          null,
+          this.wallet.publisherFeePercentDefault,
+          this.wallet,
+          this.getCustomPriceOptions(),
+        );
+        const fx = this.getEffectiveFxRate();
+        const netCny = preview ? centsToCnyYuan(preview.sellerReceivesCents, fx) : null;
+        customHint.textContent = preview
+          ? `免查价直挂 → 实际标价 ${formatCents(preview.buyerPaysCents, this.wallet)} / 实收 ${formatCents(preview.sellerReceivesCents, this.wallet)}${this.wallet.currencyCode !== 'CNY' && netCny !== null ? ` (≈${formatCnyYuan(netCny)})` : ''}`
+          : '无需查价，所有选中物品统一按此挂单价出售';
       } else if (mode === 'fixed_seller') {
         customValPrefix.textContent = '实收:';
         customValSuffix.textContent = this.wallet.currencySymbol.trim() || '元';
-        customValInput.step = this.wallet.zeroDecimal ? '1' : '0.01';
+        customValInput.step = this.wallet.zeroDecimal || this.settings.roundToWholeUnits ? '1' : '0.01';
         customValInput.min = '0.01';
         if (!isFocused) customValInput.value = centsToInputValue(this.settings.customFixedPriceCents, this.wallet);
-        customHint.textContent = '无需查价，自动叠加 Steam 手续费保证到手金额';
+        const preview = resolveStrategyPrice(
+          'custom',
+          null,
+          null,
+          this.wallet.publisherFeePercentDefault,
+          this.wallet,
+          this.getCustomPriceOptions(),
+        );
+        const fx = this.getEffectiveFxRate();
+        const netCny = preview ? centsToCnyYuan(preview.sellerReceivesCents, fx) : null;
+        customHint.textContent = preview
+          ? `免查价直挂 → 买家付 ${formatCents(preview.buyerPaysCents, this.wallet)} / 实收 ${formatCents(preview.sellerReceivesCents, this.wallet)}${this.wallet.currencyCode !== 'CNY' && netCny !== null ? ` (≈${formatCnyYuan(netCny)})` : ''}`
+          : '无需查价，自动叠加 Steam 手续费保证到手金额';
       } else if (mode === 'offset_lowest_sell') {
         customValPrefix.textContent = '偏移:';
         customValSuffix.textContent = this.wallet.currencySymbol.trim() || '元';
@@ -1530,7 +1727,39 @@ export class BatchListerUI {
     const el = document.getElementById('smbl-wallet-badge');
     if (!el) return;
     const feePct = Math.round((this.wallet.steamFeePercent + this.wallet.publisherFeePercentDefault) * 100);
-    el.textContent = `钱包 ${this.wallet.country} (${this.wallet.currencySymbol.trim()}) · 默认费率 ${feePct}%`;
+    el.textContent = `钱包 ${this.wallet.country} (${this.wallet.currencyCode} ${this.wallet.currencySymbol.trim()}) · 费率 ${feePct}%`;
+    el.title = `Steam 费率 ${(this.wallet.steamFeePercent * 100).toFixed(1)}% + 发行商默认 ${(this.wallet.publisherFeePercentDefault * 100).toFixed(1)}%，最小手续费 ${this.wallet.feeMinimum} 最小单位`;
+    this.renderFxBadge();
+  }
+
+  private renderFxBadge(): void {
+    const el = document.getElementById('smbl-fx-badge');
+    const refreshBtn = document.getElementById('smbl-fx-refresh-btn') as HTMLButtonElement | null;
+    if (!el) return;
+
+    if (this.wallet.currencyCode === 'CNY') {
+      el.textContent = '💱 人民币本币 (1:1)';
+      if (refreshBtn) refreshBtn.style.display = 'none';
+      return;
+    }
+
+    if (refreshBtn) {
+      refreshBtn.style.display = 'inline-flex';
+      refreshBtn.disabled = this.isLoadingFx;
+    }
+
+    if (this.isLoadingFx && !this.fxRate) {
+      el.textContent = `💱 查询 ${this.wallet.currencyCode}→CNY 汇率...`;
+      return;
+    }
+
+    const rate = this.getEffectiveFxRate();
+    if (rate !== null) {
+      const manualTag = this.settings && this.settings.manualFxRateToCny > 0 ? '手动' : this.fxRate?.date || '今日';
+      el.textContent = `💱 1 ${this.wallet.currencyCode} = ¥${rate.toFixed(4)} (${manualTag})`;
+    } else {
+      el.textContent = `💱 ${this.wallet.currencyCode}→CNY 获取失败(点此手动设)`;
+    }
   }
 
   private renderGameTabs(): void {
@@ -1565,7 +1794,7 @@ export class BatchListerUI {
     if (visible.length === 0) {
       tbody.innerHTML = `
         <tr>
-          <td colspan="8" class="smbl-empty">
+          <td colspan="10" class="smbl-empty">
             ${
               this.isScanning
                 ? '正在加载完整库存，请稍候...'
@@ -1581,6 +1810,8 @@ export class BatchListerUI {
 
     const threshold = this.settings?.highValueThresholdCents ?? 10000;
     const busy = this.isRunningTask !== 'none';
+    const fx = this.getEffectiveFxRate();
+    const isNonCny = this.wallet.currencyCode !== 'CNY';
 
     tbody.innerHTML = visible
       .map((g) => {
@@ -1592,6 +1823,21 @@ export class BatchListerUI {
           : calc
             ? centsToInputValue(calc.buyerPaysCents, this.wallet)
             : '';
+
+        const buyerCny = calc ? centsToCnyYuan(calc.buyerPaysCents, fx) : null;
+        const sellerCny = calc ? centsToCnyYuan(calc.sellerReceivesCents, fx) : null;
+        const balanceRatio = calculateBalanceRatio(g.costPriceCny, sellerCny);
+        const ratioCls = !balanceRatio
+          ? 'smbl-muted'
+          : balanceRatio.ratio <= 0.72
+            ? 'smbl-ratio-good'
+            : balanceRatio.ratio <= 0.85
+              ? 'smbl-ratio-mid'
+              : balanceRatio.ratio <= 1.0
+                ? 'smbl-ratio-warn'
+                : 'smbl-ratio-bad';
+
+        const costInputVal = g.costPriceCny !== null ? String(g.costPriceCny) : '';
 
         const lowestSellText =
           g.priceStatus === 'loading'
@@ -1649,21 +1895,43 @@ export class BatchListerUI {
                 </div>
               </div>
             </td>
-            <td class="smbl-num">
-              <input type="number" class="smbl-qty-input" min="1" max="${g.assets.length}" value="${g.quantityToSell}" ${busy || g.assets.length <= 1 ? 'disabled' : ''} />
-              <span class="smbl-muted">/ ${g.assets.length}</span>
+            <td class="smbl-num" style="overflow:visible;text-overflow:clip;">
+              <div class="smbl-qty-wrap">
+                <input type="number" class="smbl-qty-input" min="1" max="${g.assets.length}" value="${g.quantityToSell}" ${busy || g.assets.length <= 1 ? 'disabled' : ''} />
+                <span class="smbl-muted">/ ${g.assets.length}</span>
+              </div>
             </td>
             <td class="smbl-num smbl-price-sell">${escapeHtml(lowestSellText)}</td>
             <td class="smbl-num smbl-price-buy">${escapeHtml(highestBuyText)}</td>
             <td class="smbl-num">
-              <input type="number" step="${this.wallet.zeroDecimal ? '1' : '0.01'}" min="0" class="smbl-price-input${isManual ? ' smbl-manual' : ''}" value="${escapeHtml(inputVal)}" placeholder="未查价" ${busy ? 'disabled' : ''} />
+              <div>
+                <input type="number" step="${this.wallet.zeroDecimal || this.settings?.roundToWholeUnits ? '1' : '0.01'}" min="0" class="smbl-price-input${isManual ? ' smbl-manual' : ''}" value="${escapeHtml(inputVal)}" placeholder="未查价" ${busy ? 'disabled' : ''} />
+                ${
+                  isManual
+                    ? `<button type="button" class="smbl-btn smbl-btn-ghost" data-action="reset-manual" title="恢复策略价" style="padding:2px 4px;font-size:11px;">↺</button>`
+                    : ''
+                }
+              </div>
               ${
-                isManual
-                  ? `<button type="button" class="smbl-btn smbl-btn-ghost" data-action="reset-manual" title="恢复策略价" style="padding:2px 4px;font-size:11px;">↺</button>`
+                isNonCny && buyerCny !== null
+                  ? `<div class="smbl-cny-sub">≈ ${escapeHtml(formatCnyYuan(buyerCny))}</div>`
                   : ''
               }
             </td>
-            <td class="smbl-num smbl-price-net">${escapeHtml(formatCents(calc?.sellerReceivesCents, this.wallet))}</td>
+            <td class="smbl-num">
+              <div class="smbl-price-net">${escapeHtml(formatCents(calc?.sellerReceivesCents, this.wallet))}</div>
+              ${
+                isNonCny && sellerCny !== null
+                  ? `<div class="smbl-cny-sub">≈ ${escapeHtml(formatCnyYuan(sellerCny))}</div>`
+                  : ''
+              }
+            </td>
+            <td class="smbl-num">
+              <input type="number" step="0.01" min="0" class="smbl-cost-input" value="${escapeHtml(costInputVal)}" placeholder="选填 ¥" title="填入单件饰品成本价（人民币）自动计算余额率" ${busy ? 'disabled' : ''} />
+            </td>
+            <td class="smbl-num ${ratioCls}" title="${balanceRatio ? `成本 ¥${g.costPriceCny} ÷ 实收 ${formatCnyYuan(sellerCny)} = ${balanceRatio.formatted}` : '填入成本价后自动计算'}">
+              ${balanceRatio ? balanceRatio.formatted : '--'}
+            </td>
             <td style="text-align:center;">
               <button type="button" class="smbl-btn" data-action="fetch-one" title="查询此物品完整挂单价" style="padding:3px 7px;" ${busy ? 'disabled' : ''}>查</button>
             </td>
@@ -1683,6 +1951,11 @@ export class BatchListerUI {
     let unpricedGroups = 0;
     let totalBuyer = 0;
     let totalSeller = 0;
+    let costCoveredCostCny = 0;
+    let costCoveredSellerCny = 0;
+
+    const fx = this.getEffectiveFxRate();
+    const isNonCny = this.wallet.currencyCode !== 'CNY';
 
     for (const g of this.groups) {
       if (!g.selected) continue;
@@ -1694,16 +1967,41 @@ export class BatchListerUI {
         pricedItems += qty;
         totalBuyer += calc.buyerPaysCents * qty;
         totalSeller += calc.sellerReceivesCents * qty;
+        if (g.costPriceCny !== null && g.costPriceCny > 0) {
+          const unitSellerCny = centsToCnyYuan(calc.sellerReceivesCents, fx);
+          if (unitSellerCny !== null && unitSellerCny > 0) {
+            costCoveredCostCny += g.costPriceCny * qty;
+            costCoveredSellerCny += unitSellerCny * qty;
+          }
+        }
       } else {
         unpricedGroups += 1;
       }
     }
 
+    const totalBuyerCny = centsToCnyYuan(totalBuyer, fx);
+    const totalSellerCny = centsToCnyYuan(totalSeller, fx);
+    const overallRatio = calculateBalanceRatio(costCoveredCostCny, costCoveredSellerCny);
+    const overallRatioCls = !overallRatio
+      ? ''
+      : overallRatio.ratio <= 0.72
+        ? 'smbl-ratio-good'
+        : overallRatio.ratio <= 0.85
+          ? 'smbl-ratio-mid'
+          : overallRatio.ratio <= 1.0
+            ? 'smbl-ratio-warn'
+            : 'smbl-ratio-bad';
+
     el.innerHTML = `
       <span>已选 <strong>${selectedGroups}</strong> 组 / <strong>${selectedItems}</strong> 件</span>
       <span>可上架 <strong>${pricedItems}</strong> 件${unpricedGroups > 0 ? ` <span class="smbl-badge smbl-badge-warn">${unpricedGroups} 组待查价</span>` : ''}</span>
-      <span>预计标价 <strong class="smbl-price-sell">${escapeHtml(formatCents(totalBuyer, this.wallet))}</strong></span>
-      <span>预计实收 <strong class="smbl-price-net">${escapeHtml(formatCents(totalSeller, this.wallet))}</strong></span>
+      <span>预计标价 <strong class="smbl-price-sell">${escapeHtml(formatCents(totalBuyer, this.wallet))}</strong>${isNonCny && totalBuyerCny !== null ? ` <span class="smbl-muted">(≈${escapeHtml(formatCnyYuan(totalBuyerCny))})</span>` : ''}</span>
+      <span>预计实收 <strong class="smbl-price-net">${escapeHtml(formatCents(totalSeller, this.wallet))}</strong>${isNonCny && totalSellerCny !== null ? ` <span class="smbl-muted">(≈${escapeHtml(formatCnyYuan(totalSellerCny))})</span>` : ''}</span>
+      ${
+        overallRatio
+          ? `<span>成本 <strong>${escapeHtml(formatCnyYuan(costCoveredCostCny))}</strong> · 综合余额率 <strong class="${overallRatioCls}">${overallRatio.formatted}</strong></span>`
+          : ''
+      }
     `;
   }
 

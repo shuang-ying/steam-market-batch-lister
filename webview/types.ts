@@ -37,6 +37,10 @@ export interface PluginSettings {
   circuitBreakerMax429: number;
   /** Warn when planned price is below this % of lowest sell price (e.g. 70 = >30% discount; 0 disables) */
   lowPriceWarnPercent: number;
+  /** Force rounding listing price to whole currency units (auto-enabled for JPY/KRW/IDR/etc.) */
+  roundToWholeUnits: boolean;
+  /** Optional manual override for exchange rate to CNY (0 = auto daily fetch) */
+  manualFxRateToCny: number;
   skipModified: boolean;
   /** Threshold in minor currency units (e.g. 10000 = ¥100.00). 0 disables warning. */
   highValueThresholdCents: number;
@@ -60,6 +64,8 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   batchRestMaxSec: 60,
   circuitBreakerMax429: 2,
   lowPriceWarnPercent: 70,
+  roundToWholeUnits: false,
+  manualFxRateToCny: 0,
   skipModified: true,
   highValueThresholdCents: 10000,
   keepOneDuplicate: false,
@@ -68,6 +74,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 
 export interface WalletFeeConfig {
   currency: number;
+  currencyCode: string;
   country: string;
   steamFeePercent: number;
   publisherFeePercentDefault: number;
@@ -76,6 +83,19 @@ export interface WalletFeeConfig {
   currencySymbol: string;
   symbolPrefix: boolean;
   zeroDecimal: boolean;
+  /** True when Steam global.js marks bWholeUnitsOnly (e.g. INR/RUB/JPY/KRW) */
+  steamWholeUnitsHint: boolean;
+  /** Whether g_rgWalletInfo was actually resolved from the Steam page (false = fallback) */
+  walletDetected: boolean;
+}
+
+export interface ExchangeRateInfo {
+  currencyCode: string;
+  rateToCny: number;
+  date: string;
+  source: string;
+  fetchedAt: number;
+  isManual?: boolean;
 }
 
 export interface InventoryAssetItem {
@@ -133,6 +153,8 @@ export interface ItemGroup {
   priceStatus: 'idle' | 'loading' | 'ready' | 'error';
   /** Optional manual override for buyer pays price (in minor units) */
   manualBuyerPriceCents: number | null;
+  /** Optional user-entered cost price per item in CNY (RMB yuan), e.g. 1.0 */
+  costPriceCny: number | null;
 }
 
 export interface CalculatedListingPrice {
