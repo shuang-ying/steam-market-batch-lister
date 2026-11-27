@@ -4,6 +4,16 @@ import {
   saveCostPriceCny,
 } from './exchange-rate';
 import {
+  buildHistoryCsv,
+  computeHistoryStats,
+  createHistoryRecord,
+  formatHistoryDateTime,
+  formatRecordCents,
+  getHistoryStoragePath,
+  loadListingHistory,
+  saveListingHistory,
+} from './history';
+import {
   getActiveAppIdFromPage,
   getAvailableGameTabs,
   groupInventoryAssets,
@@ -47,6 +57,7 @@ import type {
   CustomPriceMode,
   ExchangeRateInfo,
   ItemGroup,
+  ListingHistoryRecord,
   PluginSettings,
   PricingStrategy,
   WalletFeeConfig,
@@ -61,12 +72,17 @@ interface LogEntry {
 interface FailedSellItem {
   groupKey: string;
   appid: number;
+  appName: string;
   contextid: string;
   assetid: string;
   amount: number;
+  marketHashName: string;
   displayName: string;
   buyerPaysCents: number;
   sellerReceivesCents: number;
+  costPriceCny: number | null;
+  strategy: PricingStrategy;
+  strategyLabel: string;
 }
 
 function escapeHtml(str: string): string {
@@ -97,6 +113,12 @@ export class BatchListerUI {
   private searchQuery = '';
   private logs: LogEntry[] = [];
   private failedQueue: FailedSellItem[] = [];
+  private historyRecords: ListingHistoryRecord[] = [];
+  private historyStoragePath = '';
+  private activeView: 'sell' | 'history' = 'sell';
+  private historySearchQuery = '';
+  private historyAppFilter = 'all';
+  private historyRangeFilter: 'all' | 'today' | '7d' | '30d' = 'all';
 
   private isOpen = false;
   private isScanning = false;
@@ -121,6 +143,8 @@ export class BatchListerUI {
     const ctx = resolveSteamPageContext();
     this.wallet = createWalletFeeConfig(ctx.walletInfo);
     this.settings = await loadSettings();
+    this.historyRecords = await loadListingHistory();
+    this.historyStoragePath = await getHistoryStoragePath();
 
     this.mountTriggerButtons();
     this.createPanelDom();
@@ -198,11 +222,16 @@ export class BatchListerUI {
             <button type="button" class="smbl-btn smbl-btn-ghost" id="smbl-fx-refresh-btn" title="强制刷新今日实时汇率" style="padding:2px 6px;font-size:11px;">↻</button>
           </div>
           <div class="smbl-header-actions">
+            <div class="smbl-nav-tabs" id="smbl-nav-tabs">
+              <button type="button" class="smbl-nav-tab smbl-active" data-view="sell" id="smbl-tab-sell">📦 批量上架</button>
+              <button type="button" class="smbl-nav-tab" data-view="history" id="smbl-tab-history">📜 上架记录 (0)</button>
+            </div>
             <button type="button" class="smbl-btn" id="smbl-rescan-btn">🔄 扫描当前库存</button>
             <button type="button" class="smbl-btn smbl-btn-ghost" id="smbl-close-btn">✕ 关闭</button>
           </div>
         </div>
 
+        <div class="smbl-view smbl-view-active" id="smbl-view-sell">
         <div class="smbl-gamebar" id="smbl-gamebar"></div>
 
         <div class="smbl-toolbar">
@@ -340,6 +369,50 @@ export class BatchListerUI {
             <button type="button" class="smbl-btn smbl-btn-success" id="smbl-start-sell-btn">🚀 确认批量上架</button>
           </div>
         </div>
+        </div>
+
+        <div class="smbl-view" id="smbl-view-history">
+          <div class="smbl-hist-bar">
+            <input type="text" class="smbl-input smbl-search" id="smbl-hist-search" placeholder="搜索物品名 / 英文名 / 策略..." />
+            <select class="smbl-select" id="smbl-hist-app">
+              <option value="all">全部游戏</option>
+            </select>
+            <select class="smbl-select" id="smbl-hist-range">
+              <option value="all">全部时间</option>
+              <option value="today">今天</option>
+              <option value="7d">近 7 天</option>
+              <option value="30d">近 30 天</option>
+            </select>
+            <button type="button" class="smbl-btn smbl-btn-primary" id="smbl-hist-export">📥 导出 CSV</button>
+            <button type="button" class="smbl-btn smbl-btn-danger" id="smbl-hist-clear">🗑 清空记录</button>
+          </div>
+
+          <div class="smbl-hist-summary" id="smbl-hist-summary"></div>
+
+          <div class="smbl-table-wrap">
+            <table class="smbl-table">
+              <thead>
+                <tr>
+                  <th style="width: 138px;">上架时间</th>
+                  <th style="width: 78px;">游戏</th>
+                  <th>物品名称</th>
+                  <th style="width: 136px;">定价策略</th>
+                  <th style="width: 100px;">上架价(买家付)</th>
+                  <th style="width: 100px;">实收价</th>
+                  <th style="width: 76px;">成本价(¥)</th>
+                  <th style="width: 68px;">余额率</th>
+                  <th style="width: 44px; text-align: center;">删</th>
+                </tr>
+              </thead>
+              <tbody id="smbl-hist-tbody"></tbody>
+            </table>
+          </div>
+
+          <div class="smbl-hist-footer">
+            <span id="smbl-hist-path">本地记录持久化中...</span>
+            <span>仅记录通过本插件成功提交的上架数据（最多保留最近 5000 条）</span>
+          </div>
+        </div>
       </div>
     `;
 
@@ -379,7 +452,59 @@ export class BatchListerUI {
 
     $<HTMLButtonElement>('smbl-close-btn').addEventListener('click', () => this.closePanel());
     $<HTMLButtonElement>('smbl-rescan-btn').addEventListener('click', () => {
+      if (this.activeView !== 'sell') {
+        this.switchView('sell');
+      }
       void this.scanCurrentInventory();
+    });
+
+    $<HTMLDivElement>('smbl-nav-tabs').addEventListener('click', (e) => {
+      const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-view]');
+      if (!btn) return;
+      const view = btn.dataset.view === 'history' ? 'history' : 'sell';
+      this.switchView(view);
+    });
+
+    $<HTMLInputElement>('smbl-hist-search').addEventListener('input', (e) => {
+      this.historySearchQuery = (e.target as HTMLInputElement).value.trim().toLowerCase();
+      this.renderHistoryView();
+    });
+
+    $<HTMLSelectElement>('smbl-hist-app').addEventListener('change', (e) => {
+      this.historyAppFilter = (e.target as HTMLSelectElement).value;
+      this.renderHistoryView();
+    });
+
+    $<HTMLSelectElement>('smbl-hist-range').addEventListener('change', (e) => {
+      this.historyRangeFilter = (e.target as HTMLSelectElement).value as 'all' | 'today' | '7d' | '30d';
+      this.renderHistoryView();
+    });
+
+    $<HTMLButtonElement>('smbl-hist-export').addEventListener('click', () => {
+      this.exportHistoryCsv();
+    });
+
+    $<HTMLButtonElement>('smbl-hist-clear').addEventListener('click', () => {
+      if (this.historyRecords.length === 0) return;
+      if (!window.confirm(`确定要清空本地保存的全部 ${this.historyRecords.length} 条上架记录吗？此操作不可撤销。`)) {
+        return;
+      }
+      this.historyRecords = [];
+      void saveListingHistory(this.historyRecords);
+      this.renderHistoryTabBadge();
+      this.renderHistoryView();
+      this.addLog('warn', '已清空本地全部上架记录');
+    });
+
+    $<HTMLTableSectionElement>('smbl-hist-tbody').addEventListener('click', (e) => {
+      const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-del-id]');
+      if (!btn) return;
+      const id = btn.dataset.delId;
+      if (!id) return;
+      this.historyRecords = this.historyRecords.filter((r) => r.id !== id);
+      void saveListingHistory(this.historyRecords);
+      this.renderHistoryTabBadge();
+      this.renderHistoryView();
     });
 
     $<HTMLButtonElement>('smbl-fx-refresh-btn').addEventListener('click', () => {
@@ -1211,17 +1336,28 @@ export class BatchListerUI {
         });
       }
 
+      const activeStrategy: PricingStrategy = this.settings?.strategy ?? 'lowest_sell';
+      const strategyLabel =
+        group.manualBuyerPriceCents !== null
+          ? '单行手动价'
+          : getStrategyLabel(activeStrategy, this.getCustomPriceOptions());
+
       for (let i = 0; i < qty; i += 1) {
         const asset = group.assets[i];
         plan.push({
           groupKey: group.groupKey,
           appid: asset.appid,
+          appName: this.currentAppName,
           contextid: asset.contextid,
           assetid: asset.assetid,
           amount: 1,
+          marketHashName: group.marketHashName,
           displayName: group.displayName,
           buyerPaysCents: calc.buyerPaysCents,
           sellerReceivesCents: calc.sellerReceivesCents,
+          costPriceCny: group.costPriceCny,
+          strategy: activeStrategy,
+          strategyLabel,
         });
         totalBuyerCents += calc.buyerPaysCents;
         totalSellerCents += calc.sellerReceivesCents;
@@ -1496,6 +1632,25 @@ export class BatchListerUI {
               `[已上架] ${task.displayName} | 标价 ${formatCents(task.buyerPaysCents, this.wallet)} / 实收 ${formatCents(task.sellerReceivesCents, this.wallet)}${cnyNote} (price=${task.sellerReceivesCents})`,
             );
           }
+          const record = createHistoryRecord({
+            appid: task.appid,
+            appName: task.appName,
+            contextid: task.contextid,
+            assetid: task.assetid,
+            marketHashName: task.marketHashName,
+            displayName: task.displayName,
+            amount: task.amount,
+            wallet: this.wallet,
+            buyerPaysCents: task.buyerPaysCents,
+            sellerReceivesCents: task.sellerReceivesCents,
+            fxRateToCny: fx,
+            costPriceCny: task.costPriceCny,
+            strategy: task.strategy,
+            strategyLabel: task.strategyLabel,
+          });
+          this.historyRecords.unshift(record);
+          void saveListingHistory(this.historyRecords);
+          this.renderHistoryTabBadge();
           this.removeSoldAssetFromGroups(task.groupKey, task.assetid);
         } else {
           newFailed.push(task);
@@ -2066,6 +2221,214 @@ export class BatchListerUI {
     this.renderProgress();
   }
 
+  private switchView(view: 'sell' | 'history'): void {
+    this.activeView = view;
+    const sellView = document.getElementById('smbl-view-sell');
+    const histView = document.getElementById('smbl-view-history');
+    const sellTab = document.getElementById('smbl-tab-sell');
+    const histTab = document.getElementById('smbl-tab-history');
+
+    sellView?.classList.toggle('smbl-view-active', view === 'sell');
+    histView?.classList.toggle('smbl-view-active', view === 'history');
+    sellTab?.classList.toggle('smbl-active', view === 'sell');
+    histTab?.classList.toggle('smbl-active', view === 'history');
+
+    if (view === 'history') {
+      this.renderHistoryView();
+    }
+  }
+
+  private renderHistoryTabBadge(): void {
+    const histTab = document.getElementById('smbl-tab-history');
+    if (histTab) {
+      histTab.textContent = `📜 上架记录 (${this.historyRecords.length})`;
+    }
+  }
+
+  private getFilteredHistoryRecords(): ListingHistoryRecord[] {
+    const now = Date.now();
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const todayTs = startOfToday.getTime();
+
+    return this.historyRecords.filter((r) => {
+      if (this.historyAppFilter !== 'all' && String(r.appid) !== this.historyAppFilter) {
+        return false;
+      }
+      if (this.historyRangeFilter === 'today' && r.timestamp < todayTs) {
+        return false;
+      }
+      if (this.historyRangeFilter === '7d' && r.timestamp < now - 7 * 86400 * 1000) {
+        return false;
+      }
+      if (this.historyRangeFilter === '30d' && r.timestamp < now - 30 * 86400 * 1000) {
+        return false;
+      }
+      if (this.historySearchQuery) {
+        const q = this.historySearchQuery;
+        const hit =
+          r.displayName.toLowerCase().includes(q) ||
+          r.marketHashName.toLowerCase().includes(q) ||
+          r.strategyLabel.toLowerCase().includes(q) ||
+          r.appName.toLowerCase().includes(q);
+        if (!hit) return false;
+      }
+      return true;
+    });
+  }
+
+  private renderHistoryView(): void {
+    this.renderHistoryTabBadge();
+
+    const appSelect = document.getElementById('smbl-hist-app') as HTMLSelectElement | null;
+    if (appSelect) {
+      const appMap = new Map<string, string>();
+      for (const r of this.historyRecords) {
+        const key = String(r.appid);
+        if (!appMap.has(key)) {
+          appMap.set(key, r.appName || `App ${key}`);
+        }
+      }
+      const prevVal = this.historyAppFilter;
+      appSelect.innerHTML = [
+        `<option value="all">全部游戏 (${this.historyRecords.length})</option>`,
+        ...Array.from(appMap.entries()).map(
+          ([id, name]) => `<option value="${escapeHtml(id)}">${escapeHtml(name)}</option>`,
+        ),
+      ].join('');
+      appSelect.value = appMap.has(prevVal) ? prevVal : 'all';
+      this.historyAppFilter = appSelect.value;
+    }
+
+    const filtered = this.getFilteredHistoryRecords();
+    const stats = computeHistoryStats(filtered);
+
+    const summaryEl = document.getElementById('smbl-hist-summary');
+    if (summaryEl) {
+      const ratioNum = stats.overallBalanceRatio ? Number(stats.overallBalanceRatio) : null;
+      const ratioCls =
+        ratioNum === null
+          ? ''
+          : ratioNum <= 0.72
+            ? 'smbl-ratio-good'
+            : ratioNum <= 0.85
+              ? 'smbl-ratio-mid'
+              : ratioNum <= 1.0
+                ? 'smbl-ratio-warn'
+                : 'smbl-ratio-bad';
+
+      summaryEl.innerHTML = `
+        <span>筛选结果：<strong>${stats.count}</strong> 条（总计 ${this.historyRecords.length} 条）</span>
+        ${
+          stats.cnyCoveredCount > 0
+            ? `<span>累计标价 <strong class="smbl-price-sell">${escapeHtml(formatCnyYuan(stats.totalBuyerCny))}</strong></span>
+               <span>累计实收 <strong class="smbl-price-net">${escapeHtml(formatCnyYuan(stats.totalSellerCny))}</strong></span>`
+            : ''
+        }
+        ${
+          stats.overallBalanceRatio
+            ? `<span>已填成本合计 <strong>${escapeHtml(formatCnyYuan(stats.totalCostCny))}</strong> · 综合余额率 <strong class="${ratioCls}">${stats.overallBalanceRatio}</strong></span>`
+            : ''
+        }
+      `;
+    }
+
+    const pathEl = document.getElementById('smbl-hist-path');
+    if (pathEl) {
+      pathEl.textContent = `本地保存位置：${this.historyStoragePath || '本地存储'}`;
+    }
+
+    const tbody = document.getElementById('smbl-hist-tbody');
+    if (!tbody) return;
+
+    if (filtered.length === 0) {
+      tbody.innerHTML = `
+        <tr>
+          <td colspan="9" class="smbl-empty">
+            ${
+              this.historyRecords.length === 0
+                ? '暂无上架记录。通过本插件成功上架物品后，会自动记录当时的价格、汇率、成本价、余额率与策略。'
+                : '没有匹配当前筛选条件的上架记录。'
+            }
+          </td>
+        </tr>
+      `;
+      return;
+    }
+
+    const displayList = filtered.slice(0, 500);
+    const hiddenCount = filtered.length - displayList.length;
+
+    tbody.innerHTML =
+      displayList
+        .map((r) => {
+          const isNonCny = r.currencyCode !== 'CNY';
+          const ratioNum = r.balanceRatio ? Number(r.balanceRatio) : null;
+          const ratioCls =
+            ratioNum === null
+              ? 'smbl-muted'
+              : ratioNum <= 0.72
+                ? 'smbl-ratio-good'
+                : ratioNum <= 0.85
+                  ? 'smbl-ratio-mid'
+                  : ratioNum <= 1.0
+                    ? 'smbl-ratio-warn'
+                    : 'smbl-ratio-bad';
+          const fxTooltip =
+            isNonCny && r.fxRateToCny !== null
+              ? `当时汇率：1 ${r.currencyCode} = ¥${r.fxRateToCny.toFixed(4)}`
+              : '';
+
+          return `
+            <tr>
+              <td class="smbl-num" style="font-size:11.5px;color:#9bb2c5;">${escapeHtml(formatHistoryDateTime(r.timestamp))}</td>
+              <td><span class="smbl-badge">${escapeHtml(r.appName)}</span></td>
+              <td title="${escapeHtml(`${r.marketHashName} (AssetID: ${r.assetid})`)}">
+                <div class="smbl-item-name" style="color:#e5eef5;">${escapeHtml(r.displayName)}</div>
+              </td>
+              <td style="font-size:11.5px;color:#a7bed3;" title="${escapeHtml(r.strategyLabel)}">${escapeHtml(r.strategyLabel)}</td>
+              <td class="smbl-num" title="${escapeHtml(fxTooltip)}">
+                <div class="smbl-price-sell">${escapeHtml(formatRecordCents(r.buyerPaysCents, r))}</div>
+                ${isNonCny && r.buyerPaysCny !== null ? `<div class="smbl-cny-sub">≈ ${escapeHtml(formatCnyYuan(r.buyerPaysCny))}</div>` : ''}
+              </td>
+              <td class="smbl-num" title="${escapeHtml(fxTooltip)}">
+                <div class="smbl-price-net">${escapeHtml(formatRecordCents(r.sellerReceivesCents, r))}</div>
+                ${isNonCny && r.sellerReceivesCny !== null ? `<div class="smbl-cny-sub">≈ ${escapeHtml(formatCnyYuan(r.sellerReceivesCny))}</div>` : ''}
+              </td>
+              <td class="smbl-num">${r.costPriceCny !== null ? escapeHtml(formatCnyYuan(r.costPriceCny)) : '<span class="smbl-muted">--</span>'}</td>
+              <td class="smbl-num ${ratioCls}">${r.balanceRatio ? escapeHtml(r.balanceRatio) : '--'}</td>
+              <td style="text-align:center;">
+                <button type="button" class="smbl-btn smbl-btn-ghost" data-del-id="${escapeHtml(r.id)}" title="删除此条记录" style="padding:2px 6px;">✕</button>
+              </td>
+            </tr>
+          `;
+        })
+        .join('') +
+      (hiddenCount > 0
+        ? `<tr><td colspan="9" class="smbl-empty" style="padding:12px;">仅展示最新 500 条，其余 ${hiddenCount} 条可通过上方搜索/筛选或「导出 CSV」查看完整数据。</td></tr>`
+        : '');
+  }
+
+  private exportHistoryCsv(): void {
+    const filtered = this.getFilteredHistoryRecords();
+    if (filtered.length === 0) {
+      window.alert('当前没有可导出的上架记录。');
+      return;
+    }
+    const csv = buildHistoryCsv(filtered);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const dateTag = new Date().toISOString().slice(0, 10);
+    a.href = url;
+    a.download = `steam-market-listings-${dateTag}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    this.addLog('ok', `已导出 ${filtered.length} 条上架记录为 CSV 文件`);
+  }
+
   private renderAll(): void {
     this.syncSettingsControls();
     this.renderGameTabs();
@@ -2073,5 +2436,9 @@ export class BatchListerUI {
     this.renderSummary();
     this.renderLogs();
     this.renderTaskControls();
+    this.renderHistoryTabBadge();
+    if (this.activeView === 'history') {
+      this.renderHistoryView();
+    }
   }
 }

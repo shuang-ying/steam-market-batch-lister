@@ -174,6 +174,32 @@ export interface SellTaskResult {
   message: string;
 }
 
+export interface ListingHistoryRecord {
+  id: string;
+  /** Epoch milliseconds when the item was listed */
+  timestamp: number;
+  appid: number;
+  appName: string;
+  contextid: string;
+  assetid: string;
+  marketHashName: string;
+  displayName: string;
+  amount: number;
+  currencyCode: string;
+  currencySymbol: string;
+  symbolPrefix: boolean;
+  zeroDecimal: boolean;
+  buyerPaysCents: number;
+  sellerReceivesCents: number;
+  fxRateToCny: number | null;
+  buyerPaysCny: number | null;
+  sellerReceivesCny: number | null;
+  costPriceCny: number | null;
+  balanceRatio: string | null;
+  strategy: PricingStrategy;
+  strategyLabel: string;
+}
+
 export interface SupportedGameTab {
   appid: number;
   name: string;

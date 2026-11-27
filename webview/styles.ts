@@ -502,6 +502,82 @@ export const PLUGIN_STYLES = `
   background: #25485e;
 }
 
+.smbl-nav-tabs {
+  display: inline-flex;
+  border: 1px solid #355069;
+  border-radius: 3px;
+  overflow: hidden;
+  margin-right: 4px;
+}
+.smbl-nav-tab {
+  padding: 5px 11px;
+  border: none;
+  border-right: 1px solid #355069;
+  background: #152230;
+  color: #9bb2c5;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.smbl-nav-tab:last-child {
+  border-right: none;
+}
+.smbl-nav-tab:hover {
+  color: #ffffff;
+  background: #1f3347;
+}
+.smbl-nav-tab.smbl-active {
+  background: #2d5578;
+  color: #ffffff;
+}
+
+.smbl-view {
+  display: none;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+.smbl-view.smbl-view-active {
+  display: flex;
+}
+
+.smbl-hist-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  padding: 10px 16px;
+  background: #1e2d3d;
+  border-bottom: 1px solid #2a3f54;
+}
+.smbl-hist-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 16px;
+  background: #16222f;
+  border-bottom: 1px solid #26384a;
+  font-size: 12.5px;
+  color: #b8c9d9;
+}
+.smbl-hist-summary strong {
+  color: #ffffff;
+}
+.smbl-hist-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 16px;
+  background: #171a21;
+  border-top: 1px solid #2e475d;
+  font-size: 11.5px;
+  color: #7f98ad;
+}
+
 .smbl-num {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;

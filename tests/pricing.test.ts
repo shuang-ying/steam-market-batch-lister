@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  buildHistoryCsv,
+  computeHistoryStats,
+  createHistoryRecord,
+  formatRecordCents,
+  sanitizeHistoryRecords,
+} from '../webview/history.ts';
+import {
   getLocalDateKey,
   parseFrankfurterRate,
   parseJsdelivrCurrencyApiRate,
@@ -480,4 +487,76 @@ test('Whole-unit currency snapping, daily FX parsing, CNY conversion, and 3-deci
   assert.equal(calculateBalanceRatio(0, 1.5), null);
   assert.equal(calculateBalanceRatio(1, 0), null);
   assert.equal(calculateBalanceRatio(null, 1.5), null);
+});
+
+test('Listing history snapshot creation, stats aggregation, sanitization, and UTF-8 CSV export', () => {
+  const inrWallet = createWalletFeeConfig({
+    wallet_currency: 24,
+    wallet_country: 'IN',
+    wallet_fee_percent: '0.05',
+    wallet_publisher_fee_percent_default: '0.10',
+    wallet_fee_minimum: '1',
+    wallet_fee_base: '0',
+  });
+
+  const rec1 = createHistoryRecord({
+    timestamp: Date.UTC(2026, 10, 27, 5, 0, 0),
+    appid: 730,
+    appName: 'CS2',
+    contextid: '2',
+    assetid: '90001',
+    marketHashName: 'Revolution Case',
+    displayName: '变革武器箱',
+    amount: 1,
+    wallet: inrWallet,
+    buyerPaysCents: 8000,
+    sellerReceivesCents: 6957,
+    fxRateToCny: 0.0723,
+    costPriceCny: 3.5,
+    strategy: 'lowest_sell_minus_1',
+    strategyLabel: '最低卖价 -0.01',
+  });
+
+  assert.equal(rec1.currencyCode, 'INR');
+  assert.equal(formatRecordCents(rec1.buyerPaysCents, rec1), '₹ 80.00');
+  assert.ok(rec1.sellerReceivesCny !== null && Math.abs(rec1.sellerReceivesCny - 5.0299) < 0.001);
+  assert.equal(rec1.balanceRatio, (3.5 / (69.57 * 0.0723)).toFixed(3));
+
+  const rec2 = createHistoryRecord({
+    timestamp: Date.UTC(2026, 10, 27, 5, 1, 0),
+    appid: 753,
+    appName: 'Steam 通用',
+    contextid: '6',
+    assetid: '90002',
+    marketHashName: '730-Anarchist',
+    displayName: 'Anarchist, "Special"',
+    amount: 1,
+    wallet: CNY_WALLET,
+    buyerPaysCents: 173,
+    sellerReceivesCents: 150,
+    fxRateToCny: 1,
+    costPriceCny: 1.0,
+    strategy: 'custom',
+    strategyLabel: '自定义价格 (固定卖家实收)',
+  });
+
+  assert.equal(rec2.balanceRatio, '0.667');
+
+  const sanitized = sanitizeHistoryRecords([rec1, { bad: true }, rec2]);
+  assert.equal(sanitized.length, 2);
+  // Sorted newest first
+  assert.equal(sanitized[0].assetid, '90002');
+  assert.equal(sanitized[1].assetid, '90001');
+
+  const stats = computeHistoryStats(sanitized);
+  assert.equal(stats.count, 2);
+  assert.equal(stats.cnyCoveredCount, 2);
+  assert.equal(stats.totalCostCny, 4.5);
+  assert.ok(stats.overallBalanceRatio !== null);
+
+  const csv = buildHistoryCsv(sanitized);
+  assert.ok(csv.startsWith('\uFEFF上架时间,游戏,AppID'));
+  assert.ok(csv.includes('"Anarchist, ""Special"""'));
+  assert.ok(csv.includes('最低卖价 -0.01'));
+  assert.ok(!csv.includes('上架状态'));
 });

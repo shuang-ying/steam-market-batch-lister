@@ -1,6 +1,84 @@
 local logger = require("logger")
 local millennium = require("millennium")
 local ok_http, http = pcall(require, "http")
+local ok_fs, fs = pcall(require, "fs")
+
+local function resolve_history_path()
+    local base = nil
+    local ok_inst, inst = pcall(millennium.get_install_path)
+    if ok_inst and type(inst) == "string" and #inst > 0 then
+        base = inst
+    else
+        local ok_steam, sp = pcall(millennium.steam_path)
+        if ok_steam and type(sp) == "string" and #sp > 0 then
+            base = sp .. "\\millennium"
+        end
+    end
+    if not base then
+        return nil
+    end
+    local config_dir = base .. "\\config"
+    if ok_fs and type(fs) == "table" and type(fs.create_directories) == "function" then
+        pcall(fs.create_directories, config_dir)
+    end
+    return config_dir .. "\\smbl_listing_history.json"
+end
+
+---@ffi
+--- Return local disk path used to store listing history
+---@return string
+function get_history_file_path()
+    return resolve_history_path() or ""
+end
+
+---@ffi
+--- Read persisted listing history JSON array from local disk (fallback to millennium.config)
+---@return string
+function load_history_json()
+    local path = resolve_history_path()
+    if path then
+        local f = io.open(path, "rb")
+        if f then
+            local content = f:read("*a")
+            f:close()
+            if type(content) == "string" and #content > 0 then
+                return content
+            end
+        end
+    end
+    local raw, err = millennium.config.get("listing_history")
+    if err == nil and type(raw) == "string" and #raw > 0 then
+        return raw
+    end
+    return "[]"
+end
+
+---@ffi
+--- Persist listing history JSON array to local disk (fallback to millennium.config)
+---@param history_json string
+---@return boolean
+function save_history_json(history_json)
+    if type(history_json) ~= "string" or #history_json == 0 then
+        return false
+    end
+    local path = resolve_history_path()
+    if path then
+        local f, err = io.open(path, "wb")
+        if f then
+            f:write(history_json)
+            f:close()
+            return true
+        else
+            logger:warn("Failed to write history file (" .. path .. "): " .. tostring(err))
+        end
+    end
+    local ok, set_err = millennium.config.set("listing_history", history_json)
+    if not ok then
+        logger:error("Failed to save listing_history in millennium.config: " .. tostring(set_err))
+        return false
+    end
+    return true
+end
 
 ---@ffi
 --- Fetch a public HTTPS URL from Lua backend (bypasses Steam page CSP/CORS for daily FX rates)
@@ -68,7 +146,7 @@ end
 function get_plugin_info()
     local ver = tostring(millennium.version() or "unknown"):gsub('"', '\\"')
     return string.format(
-        '{"name":"Steam Market Batch Lister","version":"1.1.0","millenniumVersion":"%s"}',
+        '{"name":"Steam Market Batch Lister","version":"1.2.0","millenniumVersion":"%s"}',
         ver
     )
 end
