@@ -149,6 +149,7 @@ npm run dev               # Millennium 热重载开发模式 (starlight watch)
 - 请合理控制单次上架数量与频率，保持稳定网络环境，避免高频撤单/反复压价。
 - 使用本工具产生的交易行为及账号相关风险由使用者自行承担；上架前请务必通过二次确认弹窗仔细核对价格。
 
-## 📄 License
+## 📄 更新日志与开源协议
 
-[MIT](./LICENSE)
+- 完整版本变更记录请查看 [CHANGELOG.md](./CHANGELOG.md)
+- 开源协议：[MIT](./LICENSE)

@@ -37,31 +37,17 @@ jobs:
       - name: Build Tampermonkey userscript (.user.js)
         run: npm run build:userscript
 
+      - name: Extract changelog for release notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: node scripts/extract-release-notes.mjs "${{ github.ref_name }}" dist/release-notes.md
+
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           name: "Steam Market Batch Lister ${{ github.ref_name }}"
-          generate_release_notes: true
-          body: |
-            ## 安装方式
-
-            ### 1. Steam 桌面客户端（Millennium >= v3.4.0）
-            1. 下载下方附件中的 **`com.steammarket.batchlister.star`**；
-            2. 复制到 `<你的 Steam 安装目录>\millennium\plugins\` 目录；
-            3. 完全退出并重启 Steam 客户端，在 **Millennium → 插件** 中启用 **Steam Market Batch Lister**；
-            4. 打开 Steam **个人资料 → 库存**，点击 **「⚡ 市场批量上架」** 即可使用。
-
-            ### 2. 浏览器油猴脚本（备用版）
-            - 下载下方附件中的 **`steam-market-batch-lister.user.js`**，导入 Tampermonkey / Violentmonkey 即可在网页版 Steam 库存使用。
-
-            ## 核心特性
-            - 支持 **CS2 / Dota 2 / TF2 / Steam 通用库存（753/6）** 及任意支持社区市场的游戏
-            - 四大定价策略：**最低卖价** / **卖家减 0.01** / **最高求购（秒出）** / **自定义价格**（固定买家付、固定实收、偏移、比例、分批锁定单行价），支持 **整数上架** 开关与 45+ 种 Steam 官方货币精准手续费计算
-            - **每日实时汇率 & 人民币折算**：按天自动查询账户货币兑人民币汇率（支持手动刷新/自定义），列表、汇总与确认弹窗同步展示上架价与实收价的人民币折算
-            - **成本价与余额率**：每件饰品可选填人民币成本价（本地自动记忆），精确到小数点后 3 位实时计算余额率（成本价 ÷ 卖出实收人民币）及整体综合余额率
-            - **🛡 拟真防风控**：三角分布随机延迟、分批自动休眠与倒计时跳过、连续 429 自动熔断保护、异常低价警告、CS2/Dota2/TF2 特殊修饰防误卖隔离
-            - 支持同类大宗物品一键跳转 Steam 官方 `/market/multisell` 批量出售页
+          body_path: dist/release-notes.md
+          generate_release_notes: false
           files: |
             dist/com.steammarket.batchlister.star
             dist/steam-market-batch-lister.user.js
